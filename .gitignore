@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# Runtime state (logs, cache, positions — regenerated each run)
+logs/
+state/price_cache/
+state/north_flow_cache.json
+state/regime_state.json
+state/positions.json
+state/north_manual/
+
+# Generated reports
+reports/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# launchd stdout/stderr logs (managed by launchd, not git)
+launchd_*.log
+
+# Jupyter
+.ipynb_checkpoints/

@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+"""
+宽基指数+海外ETF择时系统
+09:25→14:50 每10分钟分析12只ETF（A股宽基+港股+日股+美股）
+推送至专属飞书频道，不经 notifier.py
+"""
+from __future__ import annotations
+import json
+import logging
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import requests
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import data_fetcher as df_api
+from data_fetcher import _tencent_kline, _klines_to_df, _market  # 复用底层接口
+
+# ─── 配置 ──────────────────────────────────────────────────────────────────────
+
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2a6bbc1c-91cd-4cb6-963e-7b965999ea89"
+
+INDEX_UNIVERSE: dict[str, dict] = {
+    # ── A股宽基 ─────────────────────────────────────────────────
+    "510300": {"name": "沪深300",    "region": "A股", "risk": "中"},
+    "510330": {"name": "沪深300华夏","region": "A股", "risk": "中"},
+    "510500": {"name": "中证500",    "region": "A股", "risk": "中高"},
+    "510050": {"name": "上证50",     "region": "A股", "risk": "低"},
+    "159915": {"name": "创业板",     "region": "A股", "risk": "高"},
+    "588080": {"name": "科创50",     "region": "A股", "risk": "高"},
+    "159902": {"name": "中小100",    "region": "A股", "risk": "中高"},
+    "563080": {"name": "中证A50",    "region": "A股", "risk": "中"},
+    # ── 海外 ────────────────────────────────────────────────────
+    "513180": {"name": "恒生科技",   "region": "港股", "risk": "高"},
+    "513520": {"name": "日经225",    "region": "日股", "risk": "中高"},
+    "513400": {"name": "道琼斯",     "region": "美股", "risk": "中"},
+    "159501": {"name": "纳斯达克",   "region": "美股", "risk": "高"},
+}
+
+# CSI300 基准代码（用于超额收益计算）
+CSI300_CODE = "510300"
+
+# 信号定义：score 阈值 / 展示 emoji / 操作建议仓位区间
+TIMING_LEVELS = [
+    {"signal": "STRONG_BUY", "min": 72, "emoji": "🚀", "label": "强势买入", "pos": "15-20%"},
+    {"signal": "BUY",        "min": 60, "emoji": "✅", "label": "积极参与", "pos": "10-15%"},
+    {"signal": "HOLD",       "min": 45, "emoji": "🔵", "label": "持仓观察", "pos": "5-10%"},
+    {"signal": "REDUCE",     "min": 32, "emoji": "🟡", "label": "减仓等待", "pos": "2-5%"},
+    {"signal": "AVOID",      "min":  0, "emoji": "🔴", "label": "空仓观望", "pos": "0%"},
+]
+
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / f"index_timing_{datetime.today().strftime('%Y%m')}.log",
+                            encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("index_timing")
+
+
+# ─── 数据获取 ──────────────────────────────────────────────────────────────────
+
+def _fetch_etf_df(code: str, days: int = 65):
+    """用腾讯K线获取ETF日线数据（sh/sz前缀由 _market() 自动检测）"""
+    prefix = _market(code)
+    sym = f"{prefix}{code}"
+    klines = _tencent_kline(sym, days + 5)
+    if klines:
+        return _klines_to_df(klines).tail(days)
+    logger.warning(f"ETF {code} 数据获取失败")
+    return None
+
+
+# ─── 评分计算 ──────────────────────────────────────────────────────────────────
+
+def _calc_rsi(closes: np.ndarray, period: int = 14) -> float:
+    if len(closes) < period + 1:
+        return 50.0
+    deltas = np.diff(closes[-(period + 1):])
+    gains  = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+    avg_gain = gains.mean()
+    avg_loss = losses.mean()
+    if avg_loss < 1e-9:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - 100.0 / (1.0 + rs), 1)
+
+
+def _score_trend(closes: np.ndarray) -> tuple[float, str, dict]:
+    """
+    趋势得分（0-100）
+    维度: MA5>MA20>MA60排列 + MA20斜率方向 + 价格距MA20距离
+    """
+    if len(closes) < 22:
+        return 50.0, "数据不足", {}
+
+    ma5  = closes[-5:].mean()
+    ma20 = closes[-20:].mean()
+    ma60 = closes[-60:].mean() if len(closes) >= 60 else None
+    ma20_5d_ago = closes[-25:-5].mean() if len(closes) >= 25 else None
+    current = closes[-1]
+
+    # MA排列基础分
+    if ma60 is not None:
+        if current > ma5 > ma20 > ma60:
+            base, label = 90, "多头完美排列"
+        elif current > ma5 > ma20:
+            base, label = 78, "短中期多头"
+        elif current > ma20 > ma60:
+            base, label = 65, "站上MA20+MA60"
+        elif current > ma20:
+            base, label = 55, "站上MA20"
+        elif current > ma60:
+            base, label = 40, "跌破MA20但上MA60"
+        elif current > ma5:
+            base, label = 35, "弱势反弹"
+        else:
+            base = 15 if (ma5 < ma20 and (ma60 is None or ma20 < ma60)) else 28
+            label = "空头排列" if base == 15 else "弱势整理"
+    else:
+        if current > ma5 > ma20:
+            base, label = 78, "短中期多头"
+        elif current > ma20:
+            base, label = 58, "站上MA20"
+        else:
+            base, label = 28, "跌破MA20"
+
+    # MA20斜率修正（趋势方向确认）
+    slope_bonus = 0
+    if ma20_5d_ago is not None:
+        ma20_slope = (ma20 - ma20_5d_ago) / ma20_5d_ago * 100
+        if   ma20_slope >= 0.5:  slope_bonus = 8
+        elif ma20_slope >= 0.1:  slope_bonus = 4
+        elif ma20_slope <= -0.5: slope_bonus = -8
+        elif ma20_slope <= -0.1: slope_bonus = -4
+    else:
+        ma20_slope = 0.0
+
+    score = float(min(max(base + slope_bonus, 5), 98))
+    details = {
+        "ma5": round(ma5, 2), "ma20": round(ma20, 2),
+        "ma60": round(ma60, 2) if ma60 else None,
+        "ma20_slope": round(ma20_slope, 3) if ma20_5d_ago else 0.0,
+        "label": label,
+    }
+    return round(score, 1), label, details
+
+
+def _score_momentum(closes: np.ndarray, csi300_closes: Optional[np.ndarray]) -> tuple[float, str, dict]:
+    """
+    动量得分（0-100）
+    维度: 5日涨幅 + 20日涨幅 + 5日超额 + RSI健康度
+    """
+    if len(closes) < 22:
+        return 50.0, "数据不足", {}
+
+    ret5  = (closes[-1] / closes[-6]  - 1) * 100
+    ret20 = (closes[-1] / closes[-21] - 1) * 100
+    rsi   = _calc_rsi(closes)
+
+    # 5日超额（vs 沪深300）
+    excess5 = ret5
+    if csi300_closes is not None and len(csi300_closes) >= 6:
+        idx_ret5 = (csi300_closes[-1] / csi300_closes[-6] - 1) * 100
+        excess5 = ret5 - idx_ret5
+
+    # 5日涨幅评分（激进品种允许更大波动）
+    def _ret_score(r: float, t: list) -> float:
+        for s, th in t:
+            if r >= th: return s
+        return t[-1][0]
+
+    s5  = _ret_score(ret5,    [(90,5),(75,2),(60,0.5),(50,-0.5),(38,-2),(25,-5),(10,-99)])
+    s20 = _ret_score(ret20,   [(90,10),(75,5),(60,1),(50,-1),(38,-5),(25,-10),(10,-99)])
+    se  = _ret_score(excess5, [(90,2),(70,0.5),(55,-0.5),(40,-2),(20,-99)])
+
+    # RSI健康度（过热/超卖均调整）
+    if   rsi >= 80: rsi_score = 30   # 严重过热
+    elif rsi >= 72: rsi_score = 50   # 偏热
+    elif rsi >= 55: rsi_score = 80   # 动量强但未过热
+    elif rsi >= 40: rsi_score = 65   # 正常区间
+    elif rsi >= 30: rsi_score = 55   # 弱势但未极度超卖
+    else:           rsi_score = 70   # 超卖反弹机会
+
+    score = round(0.35 * s5 + 0.25 * s20 + 0.20 * se + 0.20 * rsi_score, 1)
+    score = float(min(max(score, 5), 95))
+
+    if   score >= 75: mom_label = "动量强劲"
+    elif score >= 60: mom_label = "动量偏强"
+    elif score >= 45: mom_label = "动量平稳"
+    elif score >= 30: mom_label = "动量偏弱"
+    else:             mom_label = "动量低迷"
+
+    details = {
+        "ret5": round(ret5, 2), "ret20": round(ret20, 2),
+        "excess5": round(excess5, 2), "rsi": rsi, "label": mom_label,
+    }
+    return score, mom_label, details
+
+
+def _score_volume(amounts: np.ndarray, closes: np.ndarray) -> tuple[float, str]:
+    """
+    量能得分（0-100）
+    放量上涨=买盘确认; 缩量上涨=可持续性存疑; 放量下跌=卖盘出逃
+    """
+    if len(amounts) < 22 or amounts[-1] <= 0:
+        return 50.0, "数据不足"
+
+    avg20 = float(amounts[-21:-1].mean())
+    if avg20 <= 0:
+        return 50.0, "成交额为零"
+
+    surge = amounts[-1] / avg20
+    price_up = closes[-1] > closes[-2]
+
+    if price_up:
+        if   surge >= 2.5: score, label = 92, f"巨量上涨{surge:.1f}x"
+        elif surge >= 2.0: score, label = 82, f"放量上涨{surge:.1f}x"
+        elif surge >= 1.5: score, label = 72, f"温和放量{surge:.1f}x"
+        elif surge >= 1.2: score, label = 62, f"量配合{surge:.1f}x"
+        elif surge >= 0.8: score, label = 52, f"量平稳{surge:.1f}x"
+        else:              score, label = 38, f"缩量上涨{surge:.1f}x"
+    else:
+        if   surge >= 2.5: score, label = 8,  f"巨量下跌{surge:.1f}x"
+        elif surge >= 2.0: score, label = 18, f"放量下跌{surge:.1f}x"
+        elif surge >= 1.5: score, label = 28, f"温和放量跌{surge:.1f}x"
+        elif surge >= 1.2: score, label = 38, f"量放跌{surge:.1f}x"
+        elif surge >= 0.8: score, label = 48, f"量平稳跌{surge:.1f}x"
+        else:              score, label = 58, f"缩量下跌{surge:.1f}x"
+
+    return float(score), label
+
+
+def _score_macro(north_flow, margin, breadth: dict) -> tuple[float, str]:
+    """
+    宏观资金得分（0-100）—— 所有指数共享同一宏观评分
+    北向5日净买/成交额 + 两融余额变化 + 市场宽度
+    """
+    # 北向得分（优先净买入，降级到成交额活跃度）
+    north_score = 50.0
+    if north_flow is not None:
+        net_s = north_flow.get("net_buy_billion", north_flow["net_buy_billion"]
+                               if "net_buy_billion" in north_flow.columns else None)
+        if hasattr(north_flow, "columns"):
+            net_s = north_flow["net_buy_billion"].dropna()
+            if len(net_s) >= 1:
+                net5 = float(net_s.tail(5).sum())
+                if   net5 >= 150: north_score = 90
+                elif net5 >= 80:  north_score = 78
+                elif net5 >= 30:  north_score = 65
+                elif net5 >= 5:   north_score = 55
+                elif net5 >= -10: north_score = 48
+                elif net5 >= -40: north_score = 35
+                else:             north_score = 20
+            else:
+                deal_s = north_flow["deal_amt_billion"].dropna()
+                if len(deal_s) >= 1:
+                    deal_avg = float(deal_s.tail(5).mean())
+                    north_score = 65 if deal_avg >= 300 else (52 if deal_avg >= 200 else 40)
+
+    # 两融余额变化得分
+    margin_score = 50.0
+    if margin is not None and len(margin) >= 5:
+        bal = margin["balance_billion"].dropna()
+        if len(bal) >= 5:
+            chg5 = float(bal.iloc[-1] - bal.iloc[-5])
+            if   chg5 >= 300: margin_score = 82
+            elif chg5 >= 100: margin_score = 70
+            elif chg5 >= 20:  margin_score = 58
+            elif chg5 >= -20: margin_score = 50
+            elif chg5 >= -100:margin_score = 38
+            else:             margin_score = 25
+
+    # 市场宽度（涨停/跌停比）
+    lu = breadth.get("limit_up", 0)
+    ld = breadth.get("limit_down", 1)
+    ratio = lu / max(ld, 1)
+    if   ratio >= 10: breadth_score = 90
+    elif ratio >= 5:  breadth_score = 78
+    elif ratio >= 3:  breadth_score = 65
+    elif ratio >= 1.5:breadth_score = 55
+    elif ratio >= 0.8:breadth_score = 42
+    elif ratio >= 0.3:breadth_score = 28
+    else:             breadth_score = 15
+
+    score = round(0.40 * north_score + 0.30 * margin_score + 0.30 * breadth_score, 1)
+
+    if   score >= 72: label = f"资金流入 涨{lu}/跌{ld}"
+    elif score >= 55: label = f"资金中性 涨{lu}/跌{ld}"
+    else:             label = f"资金流出 涨{lu}/跌{ld}"
+
+    return score, label
+
+
+# ─── 择时结果数据类 ─────────────────────────────────────────────────────────────
+
+@dataclass
+class IndexTiming:
+    code: str
+    name: str
+    region: str
+    current_price: float
+    composite: float
+    signal: str
+    trend_score: float
+    trend_label: str
+    momentum_score: float
+    momentum_label: str
+    volume_score: float
+    volume_label: str
+    macro_score: float
+    macro_label: str
+    details: dict = field(default_factory=dict)
+
+    @property
+    def signal_info(self) -> dict:
+        for lvl in TIMING_LEVELS:
+            if self.composite >= lvl["min"]:
+                return lvl
+        return TIMING_LEVELS[-1]
+
+    def one_line(self) -> str:
+        info = self.signal_info
+        d = self.details
+        ret5 = f"{d.get('ret5', 0):+.1f}%"
+        rsi  = d.get("rsi", 0)
+        ma_label = d.get("trend_label", "")
+        return (
+            f"{info['emoji']} **{self.name}**({self.code}) "
+            f"{info['label']} {self.composite:.0f}分 "
+            f"| 5日{ret5} RSI={rsi:.0f} | {ma_label} | {self.volume_label}"
+        )
+
+    def detail_block(self) -> str:
+        info = self.signal_info
+        d = self.details
+        ma20 = d.get("ma20", 0)
+        ma60 = d.get("ma60")
+        stop = f"MA60={ma60:.0f}" if ma60 else f"MA20={ma20:.0f}"
+        return (
+            f"{info['emoji']} **{self.name}**（ETF: {self.code}）\n"
+            f"  综合 **{self.composite:.0f}** | 趋势 {self.trend_score:.0f} "
+            f"| 动量 {self.momentum_score:.0f} | 量能 {self.volume_score:.0f} "
+            f"| 资金 {self.macro_score:.0f}\n"
+            f"  {self.trend_label} | {self.momentum_label} | {self.volume_label}\n"
+            f"  建议仓位 **{info['pos']}** | 止损参考 {stop}跌破"
+        )
+
+
+# ─── 单指数综合计算 ─────────────────────────────────────────────────────────────
+
+def _get_signal(score: float) -> str:
+    for lvl in TIMING_LEVELS:
+        if score >= lvl["min"]:
+            return lvl["signal"]
+    return "AVOID"
+
+
+def calc_index_timing(
+    code: str,
+    info: dict,
+    df,
+    csi300_closes: Optional[np.ndarray],
+    macro_score: float,
+    macro_label: str,
+) -> Optional[IndexTiming]:
+    if df is None or len(df) < 22:
+        logger.warning(f"{code} 数据不足，跳过")
+        return None
+
+    closes  = df["close"].values.astype(float)
+    amounts = df["amount"].values.astype(float)
+
+    t_score, t_label, t_details = _score_trend(closes)
+    m_score, m_label, m_details = _score_momentum(closes, csi300_closes)
+    v_score, v_label             = _score_volume(amounts, closes)
+
+    composite = round(
+        0.35 * t_score + 0.25 * m_score + 0.15 * v_score + 0.25 * macro_score, 1
+    )
+    signal = _get_signal(composite)
+
+    combined_details = {**t_details, **m_details}
+
+    return IndexTiming(
+        code=code,
+        name=info["name"],
+        region=info["region"],
+        current_price=round(float(closes[-1]), 3),
+        composite=composite,
+        signal=signal,
+        trend_score=t_score,
+        trend_label=t_label,
+        momentum_score=m_score,
+        momentum_label=m_label,
+        volume_score=v_score,
+        volume_label=v_label,
+        macro_score=macro_score,
+        macro_label=macro_label,
+        details=combined_details,
+    )
+
+
+# ─── 飞书推送 ──────────────────────────────────────────────────────────────────
+
+def _read_regime() -> str:
+    state_file = Path(__file__).parent / "state" / "regime_state.json"
+    if state_file.exists():
+        try:
+            data = json.loads(state_file.read_text(encoding="utf-8"))
+            return data.get("current_regime", "R2")
+        except Exception:
+            pass
+    return "R2"
+
+REGIME_LABEL = {"R1": "趋势牛市", "R2": "震荡市", "R3": "轮动市", "R4": "风险市"}
+REGIME_COLOR = {"R1": "green", "R2": "blue", "R3": "yellow", "R4": "red"}
+
+
+def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time: str) -> dict:
+    regime_label = REGIME_LABEL.get(regime, regime)
+    color = REGIME_COLOR.get(regime, "blue")
+
+    # 按综合分排序
+    sorted_t = sorted(timings, key=lambda x: x.composite, reverse=True)
+
+    # ── 按地区分组 ───────────────────────────────────────────────
+    regions_order = ["A股", "港股", "日股", "美股"]
+    grouped: dict[str, list[IndexTiming]] = {}
+    for t in sorted_t:
+        r = t.region
+        grouped.setdefault(r, []).append(t)
+
+    region_sections = []
+    for r in regions_order:
+        items = grouped.get(r, [])
+        if not items:
+            continue
+        lines = [t.one_line() for t in items]
+        region_sections.append(f"**{r}宽基**\n\n" + "\n\n".join(lines))
+    summary_md = "\n\n---\n\n".join(region_sections)
+
+    # ── 宏观资金（共享）──────────────────────────────────────────
+    a_stock_timings = [t for t in timings if t.region == "A股"]
+    if a_stock_timings:
+        macro_line = f"资金面：{a_stock_timings[0].macro_label}（权重25%，仅A股适用）"
+    else:
+        macro_line = ""
+
+    # ── 重点品种详情（评分≥60，最多6个）──────────────────────────
+    detail_items = [t for t in sorted_t if t.composite >= 60][:6]
+    detail_md = "\n\n".join(t.detail_block() for t in detail_items) if detail_items else "暂无强势品种"
+
+    # ── 评分说明 ─────────────────────────────────────────────────
+    score_note = "评分构成：趋势35% + 动量25% + 量能15% + 资金25%（海外ETF资金项=50中性基准）"
+    signal_note = "🚀≥72强买 | ✅≥60积极 | 🔵≥45观察 | 🟡≥32等待 | 🔴空仓"
+
+    card = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"指数ETF择时 | {regime_label} | {run_date} {run_time}",
+                },
+                "template": color,
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**机制: {regime} {regime_label}**\n"
+                            f"{score_note}\n{signal_note}"
+                        ),
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": summary_md,
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**重点品种详情**\n\n{detail_md}",
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": macro_line,
+                    },
+                },
+                {
+                    "tag": "note",
+                    "elements": [
+                        {
+                            "tag": "plain_text",
+                            "content": "ETF择时仅供参考，海外ETF受T+0及汇率影响，仓位需结合个人风险承受力。止损线触及请严格执行。",
+                        }
+                    ],
+                },
+            ],
+        },
+    }
+    return card
+
+
+def send_to_feishu(card: dict, webhook: str = FEISHU_WEBHOOK) -> bool:
+    try:
+        resp = requests.post(
+            webhook,
+            headers={"Content-Type": "application/json"},
+            json=card,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+            if result.get("code") == 0 or result.get("StatusCode") == 0:
+                logger.info("宽基择时飞书推送成功")
+                return True
+            logger.warning(f"飞书返回异常: {result}")
+        else:
+            logger.warning(f"飞书 HTTP {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.error(f"飞书推送失败: {e}")
+    return False
+
+
+# ─── 主流程 ────────────────────────────────────────────────────────────────────
+
+def run() -> None:
+    now      = datetime.today()
+    today_str = now.strftime("%Y-%m-%d")
+    time_str  = now.strftime("%H:%M")
+    weekday   = now.weekday()
+    if weekday >= 5:
+        logger.info("非交易日，跳过")
+        return
+
+    logger.info(f"=== 指数ETF择时启动 {today_str} {time_str} ===")
+
+    # ── 数据获取 ─────────────────────────────────────────────────
+    logger.info("获取ETF K线数据...")
+    etf_dfs = {}
+    for code, info in INDEX_UNIVERSE.items():
+        etf_dfs[code] = _fetch_etf_df(code, days=65)
+        status = "OK" if etf_dfs[code] is not None else "FAIL"
+        logger.info(f"  {info['name']}({code}): {status}")
+
+    # CSI300 ETF收盘序列（用于A股超额收益计算）
+    csi300_df = etf_dfs.get(CSI300_CODE)
+    csi300_closes = csi300_df["close"].values.astype(float) if csi300_df is not None else None
+
+    logger.info("获取宏观数据（北向/两融/宽度）...")
+    north_flow = df_api.get_north_flow(days=10)
+    margin     = df_api.get_margin_balance(days=10)
+    breadth    = df_api.get_market_breadth()
+    logger.info(f"  北向: {'OK' if north_flow is not None else '降级'} | "
+                f"两融: {'OK' if margin is not None else '降级'} | "
+                f"涨停{breadth.get('limit_up',0)}/跌停{breadth.get('limit_down',0)}")
+
+    # ── 宏观评分（共享） ─────────────────────────────────────────
+    macro_score, macro_label = _score_macro(north_flow, margin, breadth)
+    logger.info(f"宏观资金评分: {macro_score:.1f} — {macro_label}")
+
+    # ── 各ETF评分 ────────────────────────────────────────────────
+    regime = _read_regime()
+    timings: list[IndexTiming] = []
+    for code, info in INDEX_UNIVERSE.items():
+        # 海外ETF宏观资金用50中性基准（北向/两融/宽度不适用）
+        m_score  = macro_score if info["region"] == "A股" else 50.0
+        m_label  = macro_label if info["region"] == "A股" else "中性基准(海外)"
+
+        # 海外ETF超额收益基准为自身（无需CSI300对比）
+        benchmark = csi300_closes if info["region"] == "A股" else None
+
+        t = calc_index_timing(
+            code, info, etf_dfs.get(code),
+            benchmark, m_score, m_label,
+        )
+        if t:
+            timings.append(t)
+            logger.info(f"  {t.name}({t.region}): {t.composite:.1f} [{t.signal}] "
+                        f"趋势{t.trend_score:.0f} 动量{t.momentum_score:.0f} "
+                        f"量能{t.volume_score:.0f} 资金{t.macro_score:.0f}")
+
+    if not timings:
+        logger.error("无有效ETF数据，退出")
+        return
+
+    # ── 推送飞书 ─────────────────────────────────────────────────
+    card = build_card(timings, today_str, regime, time_str)
+    send_to_feishu(card)
+
+    # ── 保存快照 ─────────────────────────────────────────────────
+    snapshot = {
+        "date": today_str,
+        "time": time_str,
+        "regime": regime,
+        "macro_score": macro_score,
+        "etfs": [
+            {
+                "code": t.code, "name": t.name, "region": t.region,
+                "composite": t.composite, "signal": t.signal,
+                "trend": t.trend_score, "momentum": t.momentum_score,
+                "volume": t.volume_score, "macro": t.macro_score,
+                "details": t.details,
+            }
+            for t in timings
+        ],
+    }
+    snap_file = LOG_DIR / f"index_timing_{today_str}.json"
+    existing = json.loads(snap_file.read_text(encoding="utf-8")) if snap_file.exists() else {}
+    runs = existing.get("runs", [])
+    runs.append(snapshot)
+    existing["date"] = today_str
+    existing["regime"] = regime
+    existing["runs"] = runs
+    snap_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2))
+    logger.info(f"快照已追加: {snap_file} (第{len(runs)}次)")
+    logger.info("=== 指数ETF择时完成 ===")
+
+
+if __name__ == "__main__":
+    run()
