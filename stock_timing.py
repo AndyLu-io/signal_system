@@ -54,9 +54,9 @@ REGIME_STOCK_MAX = {"R1": 8, "R2": 6, "R3": 4, "R4": 0}
 POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
 SCORE_BUY_STRONG = 5
-SCORE_BUY_WATCH  = 3
+SCORE_BUY_WATCH  = 4   # 回测显示3分BUY_WATCH T+5均收-2.72%，提高门槛
 SCORE_HOLD       = -1
-SCORE_REDUCE     = -3
+SCORE_REDUCE     = -4  # 回测显示REDUCE后均反弹+2.16%，放宽触发条件
 
 _TENCENT_HEADERS = {
     "User-Agent": (
@@ -703,6 +703,26 @@ def _suggest_entry(ind: dict, sig: str) -> tuple[float, str]:
     return round(close, 2), "当前价位可小仓试探建仓"
 
 
+def _score100(score: int) -> int:
+    """将原始得分（约 -10~+10）映射到 0-100 评分，便于直观判断。"""
+    return min(100, max(0, round((score + 10) * 5)))
+
+
+def _score100_bar(score100: int) -> str:
+    """生成可视化评分条，每10分一格，共10格。"""
+    filled = score100 // 10
+    bar = "█" * filled + "░" * (10 - filled)
+    if score100 >= 75:
+        level = "强"
+    elif score100 >= 60:
+        level = "中"
+    elif score100 >= 40:
+        level = "弱"
+    else:
+        level = "差"
+    return f"{bar} **{score100}/100**（{level}）"
+
+
 def _signal_line(r: dict) -> str:
     ind   = r["ind"]
     info  = r["info"]
@@ -713,6 +733,7 @@ def _signal_line(r: dict) -> str:
     text  = "、".join(r["reasons"]) if r["reasons"] else "技术中性"
 
     emoji, label = _signal_label(sig, score, pos)
+    s100 = _score100(score)
 
     price_line = (
         f"价格 **{ind['close']:.2f}**"
@@ -722,9 +743,11 @@ def _signal_line(r: dict) -> str:
     ma60_arr = "↑" if ma60_slope > 0.3 else ("↓" if ma60_slope < -0.3 else "→")
     flow = ind.get("main_force_flow", 0.0)
     flow_str = (f"  主力{'↑' if flow > 0 else '↓'}{abs(flow):.1f}亿" if abs(flow) >= 0.3 else "")
+    score_bar = _score100_bar(s100)
     tech_line = (
-        f"{_rsi_tag(ind['rsi'])}  量比={ind['vol_ratio']:.1f}x"
-        f"  3日{ind['chg3']:+.1f}%  MA60{ma60_arr}  得分{score:+d}"
+        f"📊 评分 {score_bar}\n"
+        f"  {_rsi_tag(ind['rsi'])}  量比={ind['vol_ratio']:.1f}x"
+        f"  3日{ind['chg3']:+.1f}%  MA60{ma60_arr}"
         f"{flow_str}  ｜ {text}"
     )
     if sig in ("BUY_STRONG", "BUY_WATCH") and pos > 0:
@@ -780,15 +803,44 @@ def build_card(results: list[dict], regime: str, ts: str, ctx: dict | None = Non
     holds      = [r for r in results if r["signal"] == "HOLD" and 0 <= r["score"] < 2]
     weak_holds = [r for r in results if r["signal"] == "HOLD" and r["score"] < 0]
 
-    # 情绪过热时降级买入信号（不执行操作）
+    # 情绪过热时：BUY_WATCH 降级为观察，BUY_STRONG 保留置顶（加警示标题）
     if timing_blocked:
-        near_buys  = near_buys + buys_s + buys_w
-        buys_s     = []
-        buys_w     = []
+        near_buys = near_buys + buys_w
+        buys_w    = []
+
+    def _sec(title: str, items: list[dict]) -> list[dict]:
+        if not items:
+            return []
+        body = "\n\n".join(_signal_line(r) for r in items)
+        return [
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**\n{body}"}},
+            {"tag": "hr"},
+        ]
+
+    def _name_sec(title: str, items: list[dict]) -> list[dict]:
+        if not items:
+            return []
+        names = "　".join(
+            f"{r['name']}({r['code']}) {_score100(r['score'])}/100"
+            for r in items
+        )
+        return [
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**\n{names}"}},
+            {"tag": "hr"},
+        ]
 
     elements: list[dict] = []
 
-    # ── 宏观摘要（顶部） ──────────────────────────────────────────────────
+    # ── 强买入信号 —— 永远置顶 ───────────────────────────────────────────
+    if buys_s:
+        buy_title = (
+            "🚀 ━━ 强买入信号（⚠️情绪过热，等回落确认后入场）━━"
+            if timing_blocked else
+            "🚀 ━━ 强买入信号 ━━"
+        )
+        elements += _sec(buy_title, buys_s)
+
+    # ── 宏观摘要 ──────────────────────────────────────────────────────────
     if ctx:
         macro_text = _fmt_macro_section(ctx)
         if macro_text:
@@ -812,25 +864,6 @@ def build_card(results: list[dict], regime: str, ts: str, ctx: dict | None = Non
             {"tag": "hr"},
         ]
 
-    def _sec(title: str, items: list[dict]) -> list[dict]:
-        if not items:
-            return []
-        body = "\n\n".join(_signal_line(r) for r in items)
-        return [
-            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**\n{body}"}},
-            {"tag": "hr"},
-        ]
-
-    def _name_sec(title: str, items: list[dict]) -> list[dict]:
-        if not items:
-            return []
-        names = "　".join(f"{r['name']}({r['code']}) {r['score']:+d}分" for r in items)
-        return [
-            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**\n{names}"}},
-            {"tag": "hr"},
-        ]
-
-    elements += _sec("🚀 ━━ 强买入信号 ━━", buys_s)
     elements += _sec("🔵 ━━ 观察建仓 · 今日机会 ━━", buys_w)
     elements += _sec("🟡 接近买入线（可小仓关注）", near_buys)
     elements += _sec("🔴 止损（立即执行）", sell_stops)
@@ -947,10 +980,15 @@ def main(dry: bool = False, force: bool = False) -> None:
 
         sig  = signal_type(score)
 
-        # SELL_STOP 2日确认：连续跌破MA60不满2日时降级为REDUCE
-        if sig == "SELL_STOP" and ind.get("consec_below_ma60", 0) < 2:
+        # BUY_WATCH 质量过滤：★☆☆ 单维共振不够强，降级为 HOLD
+        if sig == "BUY_WATCH" and info.get("signal_3d", "★☆☆") == "★☆☆":
+            sig = "HOLD"
+            reasons.append("单维共振(★☆☆)，等待信号强化")
+
+        # SELL_STOP 3日确认：连续跌破MA60不满3日时降级为REDUCE（回测:止损后反弹+9.33%）
+        if sig == "SELL_STOP" and ind.get("consec_below_ma60", 0) < 3:
             sig = "REDUCE"
-            reasons.append("MA60跌破未满2日确认，降级为减仓")
+            reasons.append(f"MA60跌破{ind.get('consec_below_ma60',0)}日未满3日确认，降级为减仓")
 
         pos  = calc_position(sig, info, regime)
         stop = calc_stop(ind)

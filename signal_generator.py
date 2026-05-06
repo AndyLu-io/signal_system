@@ -232,10 +232,16 @@ def generate_signals(
             continue
 
         # 信念等级不在机制允许范围
+        # 回测显示REDUCE后T+5均涨+3.81%，未持仓时不强制减仓，改为观望
         if tier not in allowed_tiers:
-            signals.append(_make_signal(code, name, SIGNAL_REDUCE, tier, composite,
-                                        0, params["stop_loss_core"],
-                                        f"当前机制{regime}不支持{tier}级品种"))
+            if code in current_positions:
+                signals.append(_make_signal(code, name, SIGNAL_REDUCE, tier, composite,
+                                            0, params["stop_loss_core"],
+                                            f"已持仓，{regime}不支持{tier}级，逐步减仓"))
+            else:
+                signals.append(_make_signal(code, name, SIGNAL_HOLD, tier, composite,
+                                            0, params["stop_loss_core"],
+                                            f"{tier}级，{regime}暂不追加，持续观察"))
             continue
 
         # 止损检查（已持仓品种）
