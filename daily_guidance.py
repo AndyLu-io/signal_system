@@ -903,49 +903,95 @@ def _format_etf_guidance(detail: dict) -> str:
         )
         lines.append(f"  {names}")
 
-    # ── 板块热力表（按 cluster 聚合，一行一板块）────────────────────────────────
+    return "\n".join(lines)
+
+
+def _format_board_heatmap(detail: dict) -> str:
+    """板块热力表：每板块一行，按最高评分排序，始终显示（早盘+盘中均适用）"""
+    if not detail:
+        return ""
     try:
         from config import ETF_UNIVERSE as _EU
-        _CLUSTER_SHORT = {
-            "ai_compute":   "🤖 AI算力",
-            "power_export": "⚡ 电力设备",
-            "space_robot":  "🚀 卫星·机器人",
-            "new_energy":   "🌱 新能源",
-            "optics":       "💡 光模块",
-            "semicon":      "💾 半导体设计",
-            "defensive":    "🛡️ 红利防御",
-            "finance":      "🏦 金融",
-            "broad_market": "📊 宽基",
-            "overseas":     "🌏 海外",
-            "commodity":    "⛏️ 大宗商品",
-            "agriculture":  "🌾 农业",
-        }
-        _SIG_ORDER = ["BUY_STRONG", "BUY_WATCH", "HOLD", "REDUCE", "SELL_STOP", "AVOID"]
-        _SIG_TAG = {
-            "BUY_STRONG": "**强买**", "BUY_WATCH": "关注买",
-            "HOLD": "观察",         "REDUCE": "减仓",
-            "SELL_STOP": "**止损**", "AVOID": "回避",
-        }
-        cmap: dict[str, list[dict]] = {}
-        for s in signals:
-            cl = _EU.get(s["code"], {}).get("cluster", "")
-            if cl:
-                cmap.setdefault(cl, []).append(s)
-        if cmap:
-            rows: list[tuple[int, str]] = []
-            for cl, cs in cmap.items():
-                best_s = max(cs, key=lambda x: x["composite"])
-                best_score = int(best_s["composite"])
-                best_sig = next((p for p in _SIG_ORDER if p in {x["signal"] for x in cs}), "AVOID")
-                label = _CLUSTER_SHORT.get(cl, cl)
-                sig_tag = _SIG_TAG.get(best_sig, best_sig)
-                rows.append((-best_score, f"  {label} {best_s['tier']}/{best_score}  {best_s['name']}[{sig_tag}]"))
-            rows.sort(key=lambda x: x[0])
-            lines.append("\n**━━━ 🗺️ 板块热力表 ━━━**")
-            for _, row in rows:
-                lines.append(row)
-    except Exception:
-        pass
+    except ImportError:
+        return ""
+
+    _CLUSTER_SHORT = {
+        "ai_compute":   "🤖 AI算力",
+        "power_export": "⚡ 电力设备",
+        "space_robot":  "🚀 卫星机器人",
+        "new_energy":   "🌱 新能源",
+        "optics":       "💡 光模块",
+        "semicon":      "💾 半导体设计",
+        "defensive":    "🛡️ 红利防御",
+        "finance":      "🏦 金融",
+        "broad_market": "📊 宽基",
+        "overseas":     "🌏 海外",
+        "commodity":    "⛏️ 大宗商品",
+        "agriculture":  "🌾 农业",
+    }
+    _SIG_ORDER = ["BUY_STRONG", "BUY_WATCH", "HOLD", "REDUCE", "SELL_STOP", "AVOID"]
+
+    timing_block = detail.get("sentiment", {}).get("timing_block", False)
+    senti_level  = detail.get("sentiment", {}).get("level", "")
+
+    def _bar(score: float) -> str:
+        filled = round((max(float(score), 40.0) - 40.0) / 60.0 * 6)
+        filled = max(0, min(6, filled))
+        return "█" * filled + "░" * (6 - filled)
+
+    def _action(sig: str, tier: str) -> str:
+        if sig == "BUY_STRONG":
+            return "🟢**可买入**" if not timing_block else "⏳**持仓等回调**"
+        if sig == "BUY_WATCH":
+            return "🔵**可试仓**" if not timing_block else "⏳**持仓等回调**"
+        if sig == "HOLD":
+            if tier in ("S", "A"):
+                return "⏳**持仓等加仓**" if timing_block else "🔵**等MA5可加**"
+            if tier == "B":
+                return "⏳持仓等回踩" if timing_block else "🔵等回踩关注"
+            return "🔍C级跟踪"
+        if sig == "REDUCE":
+            return "🟡减仓"
+        if sig == "SELL_STOP":
+            return "🔴止损"
+        return "⛔回避"
+
+    signals = detail.get("signals", [])
+    cmap: dict[str, list[dict]] = {}
+    for s in signals:
+        cl = _EU.get(s["code"], {}).get("cluster", "")
+        if cl:
+            cmap.setdefault(cl, []).append(s)
+
+    if not cmap:
+        return ""
+
+    rows: list[tuple[int, str, str, dict, str]] = []
+    for cl, cs in cmap.items():
+        best_s     = max(cs, key=lambda x: x["composite"])
+        best_score = int(best_s["composite"])
+        if best_score < 40:
+            continue
+        best_sig = next((p for p in _SIG_ORDER if p in {x["signal"] for x in cs}), "AVOID")
+        rows.append((-best_score, cl, best_sig, best_s, ""))
+
+    if not rows:
+        return ""
+
+    rows.sort(key=lambda x: x[0])
+
+    if timing_block:
+        state_line = f"🔥 {senti_level}·买入拦截  A/B持仓等回调，C跟踪，有仓位不追高"
+    else:
+        state_line = "✅ 正常窗口·按信号操作"
+
+    lines = [f"**🗺️ 板块热力表**\n{state_line}"]
+    for neg_score, cl, best_sig, best_s, _ in rows:
+        score  = -neg_score
+        bar    = _bar(score)
+        label  = _CLUSTER_SHORT.get(cl, cl)
+        action = _action(best_sig, best_s["tier"])
+        lines.append(f"{label}  `{bar}`  {best_s['tier']}/{score}  {best_s['name']}  {action}")
 
     return "\n".join(lines)
 
@@ -1253,7 +1299,13 @@ def send_feishu(
             flow_detail or {}, etf_prices or {}, north_signal=north_sig
         )
 
+    # 板块热力表（早盘+盘中均显示）
+    heatmap_text = _format_board_heatmap(signal_detail)
+    if heatmap_text:
+        elements += [{"tag": "hr"}, md(heatmap_text)]
+
     elements += [
+        {"tag": "hr"},
         md(macro_block),
         *rotation_elements,
         {
