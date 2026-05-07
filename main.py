@@ -23,6 +23,7 @@ import signal_generator
 import sentiment_gauge
 import rotation_advisor
 import notifier
+import etf_reversal
 from data_health import check_data_health
 
 # ─── 日志配置 ─────────────────────────────────────────────────────────────────
@@ -217,6 +218,32 @@ def run() -> None:
             logger.info(f"  {s['signal']:12s} {s['name']}({s['code']}) "
                         f"评分{s['composite']} {s['tier']}级 仓位{s['weight_pct']}%")
 
+    # ── 4.5 ETF底部反转候选检测 ───────────────────────────────────────────────
+    logger.info("Step 4.5/5: 检测ETF底部反转候选...")
+    etf_prices_long = df_api.get_etf_prices(etf_codes, days=300)
+    north_5d_val: float | None = north_5d_billion  # 已在步骤2.6中计算
+
+    reversals: list[dict] = []
+    for code, info in ETF_UNIVERSE.items():
+        df_long = etf_prices_long.get(code)
+        if df_long is None:
+            continue
+        flow = main_force.get(code, 0.0)
+        rev = etf_reversal.check_reversal(
+            code=code,
+            df=df_long,
+            info=info,
+            main_force_flow=flow,
+            north_5d=north_5d_val,
+            sentiment=sentiment,
+        )
+        if rev is not None:
+            reversals.append(rev)
+            logger.info(f"  ETF反转候选: {info['name']}({code}) {rev['rev_pts']}/18分")
+
+    reversals.sort(key=lambda r: -r["rev_pts"])
+    logger.info(f"ETF底部反转候选共 {len(reversals)} 只")
+
     # ── 5. 飞书推送 ──────────────────────────────────────────────────────────
     logger.info("Step 5/5: 推送飞书...")
     success = notifier.send_signal(
@@ -228,6 +255,7 @@ def run() -> None:
         sentiment=sentiment,
         rotation=rotation,
         data_health=data_health,
+        reversals=reversals,
     )
 
     if success:

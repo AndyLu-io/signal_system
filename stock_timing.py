@@ -54,8 +54,8 @@ REGIME_STOCK_MAX = {"R1": 8, "R2": 6, "R3": 4, "R4": 0}
 POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
 SCORE_BUY_STRONG = 5
-SCORE_BUY_WATCH  = 4   # 回测显示3分BUY_WATCH T+5均收-2.72%，提高门槛
-SCORE_HOLD       = -1
+SCORE_BUY_WATCH  = 5   # 2026-05回测: score=4 BUY_WATCH T+5均收-2.12%超额-3.33%，提至5使其不再触发；score=4→near_buy观察
+SCORE_HOLD       = -2  # 2026-05回测: REDUCE后T+5均收+2.37%说明-2档减仓过早，放宽至-2保留HOLD
 SCORE_REDUCE     = -4  # 回测显示REDUCE后均反弹+2.16%，放宽触发条件
 
 _TENCENT_HEADERS = {
@@ -134,12 +134,13 @@ def _fetch_tencent_kline(code: str, count: int = 120) -> list | None:
     return None
 
 
-def fetch_kline(code: str) -> pd.DataFrame | None:
+def fetch_kline(code: str, count: int = 300) -> pd.DataFrame | None:
     """
     返回 DataFrame(date, open, close, high, low, volume)。
     腾讯接口在交易时段自动包含今日实时价格作为最后一行。
+    count=300 约覆盖14个月日线，足够重采样出60根周K和12根月K。
     """
-    klines = _fetch_tencent_kline(code, count=120)
+    klines = _fetch_tencent_kline(code, count=count)
     if not klines or len(klines) < 30:
         return None
     rows = []
@@ -232,6 +233,22 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         else:
             break
 
+    # 布林带 (20, 2σ)
+    boll_std   = close.rolling(20).std()
+    boll_upper = float((ma20 + 2 * boll_std).iloc[-1])
+    boll_lower = float((ma20 - 2 * boll_std).iloc[-1])
+    boll_width = boll_upper - boll_lower
+    boll_pct   = float((close.iloc[-1] - boll_lower) / boll_width) if boll_width > 0 else 0.5
+
+    # 日线 MACD 即将金叉：DIF < DEA 但差距正在缩小且 DIF 在上升
+    _d, _e   = float(dif.iloc[-1]),  float(dea.iloc[-1])
+    _dp, _ep = float(dif.iloc[-2]),  float(dea.iloc[-2])
+    pre_golden_cross = (
+        _d < _e and
+        _d > _dp and
+        (_e - _d) < (_ep - _dp)
+    )
+
     return {
         "close":           float(close.iloc[-1]),
         "ma5":             float(ma5.iloc[-1]),
@@ -248,8 +265,12 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         "data_date":       data_date,
         "ma60_slope_5d":   ma60_slope_5d,
         "consec_down_days": consec_down_days,
-        "consec_below_ma60": consec_below_ma60,
-        "main_force_flow": 0.0,   # 在主循环中由 get_etf_main_force_flow 填充
+        "consec_below_ma60":  consec_below_ma60,
+        "boll_upper":         boll_upper,
+        "boll_lower":         boll_lower,
+        "boll_pct":           round(boll_pct, 3),
+        "pre_golden_cross":   pre_golden_cross,
+        "main_force_flow":    0.0,   # 在主循环中由 get_etf_main_force_flow 填充
     }
 
 
@@ -342,6 +363,215 @@ def signal_type(score: int) -> str:
     if score >= SCORE_HOLD:       return "HOLD"
     if score >= SCORE_REDUCE:     return "REDUCE"
     return "SELL_STOP"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 周/月K 分析（从日线 DataFrame 重采样，无需额外 HTTP 请求）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resample_period(df: pd.DataFrame, freq: str) -> pd.DataFrame | None:
+    try:
+        idx = df.set_index("date")
+        closes = idx["close"].resample(freq).last().dropna()
+        vols   = idx["volume"].resample(freq).sum()
+        out = closes.to_frame()
+        out["volume"] = vols
+        return out.reset_index()
+    except Exception:
+        return None
+
+
+def _weekly_macd_state(df: pd.DataFrame) -> dict:
+    """周K MACD 状态（需要 ≥30 根周K，即约 7 个月日线数据）。"""
+    df_w = _resample_period(df, "W")
+    if df_w is None or len(df_w) < 30:
+        return {"ok": False}
+    close = df_w["close"].astype(float)
+    dif = _ema(close, 12) - _ema(close, 26)
+    dea = _ema(dif, 9)
+    d, e   = float(dif.iloc[-1]),  float(dea.iloc[-1])
+    dp, ep = float(dif.iloc[-2]),  float(dea.iloc[-2])
+    pre_cross = d < e and d > dp and (e - d) < (ep - dp)
+    bar_now  = float(2 * (dif - dea).iloc[-1])
+    bar_prev = float(2 * (dif - dea).iloc[-2])
+    return {
+        "ok":         True,
+        "golden":     d > e,
+        "pre_cross":  pre_cross,
+        "above_zero": d > 0,
+        "bar_rising": bar_now > bar_prev,
+        "dif":        round(d, 4),
+        "dea":        round(e, 4),
+    }
+
+
+def _monthly_trend_state(df: pd.DataFrame) -> dict:
+    """月K 趋势状态（用 MA3/MA6 判断，不依赖 MACD 避免月K数量不足）。"""
+    df_m = _resample_period(df, "ME")
+    if df_m is None or len(df_m) < 6:
+        return {"ok": False}
+    close  = df_m["close"].astype(float)
+    ma3    = close.rolling(3).mean()
+    ma6    = close.rolling(6).mean()
+    cur    = float(close.iloc[-1])
+    ma3_v  = float(ma3.iloc[-1])
+    ma6_v  = float(ma6.iloc[-1])
+    ma3_p  = float(ma3.iloc[-2]) if len(ma3.dropna()) >= 2 else ma3_v
+    # 月线MACD（简版，用MA3-MA6代替DIF）
+    dif_proxy = ma3_v - ma6_v
+    dif_p     = float(ma3.iloc[-2]) - float(ma6.iloc[-2]) if len(ma6.dropna()) >= 2 else dif_proxy
+    return {
+        "ok":           True,
+        "above_ma6":    cur > ma6_v,
+        "ma3_rising":   ma3_v > ma3_p,
+        "dif_positive": dif_proxy > 0,
+        "dif_rising":   dif_proxy > dif_p,
+        "ma3":          round(ma3_v, 2),
+        "ma6":          round(ma6_v, 2),
+    }
+
+
+def check_reversal(
+    ind: dict,
+    df: pd.DataFrame,
+    info: dict | None = None,
+    ctx: dict | None = None,
+) -> dict | None:
+    """
+    底部反转候选筛选（满分18分，≥9分入选）。
+
+    硬门槛（必须全部满足才进入评分）：
+      ① 价格在布林带中位以下（boll_pct < 0.50），即处于调整/底部区域
+      ② MACD 有改善迹象（日线pre_golden_cross / 刚金叉 / 绿柱收缩）
+
+    技术面（满分6）：
+      日线MACD即将金叉  +2 ｜ 已金叉/绿柱缩  +1
+      Boll ≤15%位       +2 ｜ ≤30%位         +1
+      RSI < 35          +2 ｜ < 45            +1
+    周期面（满分4）：
+      周线MACD金叉/即将  +2 ｜ 零轴以上/柱改善 +1
+      月线站MA6且上升    +2 ｜ 任满足1          +1
+    资金面（满分2）：
+      主力净流入>0.5亿  +2 ｜ 中性             +1
+    政策面（满分4）：
+      f_policy ≥ 85     +2 ｜ ≥ 70            +1
+      f_earnings ≥ 75   +1（盈利支撑）
+      北向5日净流入>50亿 +1
+    情绪面（满分2）：
+      市场情绪COLD/NORMAL +2（最佳买入窗口）
+      市场情绪WARM        +1
+    """
+    # ── 硬门槛 ──────────────────────────────────────────────────────────
+    bp = ind.get("boll_pct", 0.5)
+    if bp >= 0.50:           # 价格在布林带中位以上 → 不是底部
+        return None
+
+    bar_now  = ind.get("macd_bar", 0)
+    bar_prev = ind.get("macd_bar_p", 0)
+    macd_improving = (
+        ind.get("pre_golden_cross", False) or
+        ind.get("cross") == "golden" or
+        (bar_now < 0 and bar_now > bar_prev)  # 负柱缩小
+    )
+    if not macd_improving:   # MACD 没有改善迹象 → 仍在下跌中段
+        return None
+
+    pts      = 0
+    details  = []
+    dim_tech = dim_cycle = dim_fund = dim_policy = dim_senti = 0
+
+    # ── 维度1: 技术面 ─────────────────────────────────────────────────
+    if ind.get("pre_golden_cross"):
+        pts += 2; dim_tech += 2; details.append("日线MACD即将金叉🔔")
+    elif ind.get("cross") == "golden":
+        pts += 1; dim_tech += 1; details.append("日线MACD刚金叉")
+    else:
+        pts += 1; dim_tech += 1; details.append("日线MACD绿柱收缩")
+
+    if bp <= 0.15:
+        pts += 2; dim_tech += 2; details.append(f"Boll触底({bp:.0%})")
+    elif bp <= 0.30:
+        pts += 1; dim_tech += 1; details.append(f"Boll接近下轨({bp:.0%})")
+
+    rsi = ind.get("rsi", 50)
+    if rsi < 35:
+        pts += 2; dim_tech += 2; details.append(f"RSI超卖{rsi:.0f}")
+    elif rsi < 45:
+        pts += 1; dim_tech += 1; details.append(f"RSI偏低{rsi:.0f}")
+
+    # ── 维度2: 周期面 ─────────────────────────────────────────────────
+    wk = _weekly_macd_state(df)
+    if wk["ok"]:
+        if wk.get("golden") or wk.get("pre_cross"):
+            pts += 2; dim_cycle += 2
+            details.append("周线MACD" + ("金叉✅" if wk.get("golden") else "即将金叉🔔"))
+        elif wk.get("above_zero"):
+            pts += 1; dim_cycle += 1; details.append("周线DIF零轴以上")
+        elif wk.get("bar_rising"):
+            pts += 1; dim_cycle += 1; details.append("周线MACD柱改善")
+
+    mk = _monthly_trend_state(df)
+    if mk["ok"]:
+        above    = mk.get("above_ma6", False)
+        rising   = mk.get("ma3_rising", False)
+        dif_pos  = mk.get("dif_positive", False)
+        dif_rise = mk.get("dif_rising", False)
+        if above and rising:
+            pts += 2; dim_cycle += 2; details.append("月线站MA6且上升✅")
+        elif above or dif_pos:
+            pts += 1; dim_cycle += 1
+            details.append("月线MA6支撑" if above else "月线趋势向好")
+        elif dif_rise:
+            pts += 1; dim_cycle += 1; details.append("月线趋势改善中")
+
+    # ── 维度3: 资金面 ─────────────────────────────────────────────────
+    flow = ind.get("main_force_flow", 0.0)
+    if flow > 0.5:
+        pts += 2; dim_fund += 2; details.append(f"主力净流入{flow:.1f}亿💰")
+    elif flow >= -0.3:
+        pts += 1; dim_fund += 1; details.append("主力资金中性")
+
+    # ── 维度4: 政策面 ─────────────────────────────────────────────────
+    _info = info or {}
+    f_policy   = _info.get("f_policy", 60)
+    f_earnings = _info.get("f_earnings", 60)
+    if f_policy >= 85:
+        pts += 2; dim_policy += 2; details.append(f"强政策支撑(f_policy={f_policy})")
+    elif f_policy >= 70:
+        pts += 1; dim_policy += 1; details.append(f"政策评分{f_policy}")
+    if f_earnings >= 75:
+        pts += 1; dim_policy += 1; details.append(f"盈利质量佳(f_earnings={f_earnings})")
+
+    north_5d = (ctx or {}).get("north_5d")
+    if north_5d is not None and north_5d > 50:
+        pts += 1; dim_policy += 1; details.append(f"北向5日净流入{north_5d:.0f}亿")
+
+    # ── 维度5: 情绪面 ─────────────────────────────────────────────────
+    senti = (ctx or {}).get("sentiment")
+    if senti is not None:
+        slevel = getattr(senti, "level", "NORMAL")
+        if slevel in ("COLD", "NORMAL"):
+            pts += 2; dim_senti += 2; details.append(f"市场情绪{slevel}(最佳买点窗口)🟢")
+        elif slevel == "WARM":
+            pts += 1; dim_senti += 1; details.append("市场情绪温和，可介入")
+        else:
+            details.append(f"市场情绪{slevel}⚠️，反转需等回落")
+
+    if pts < 9:              # 至少9分才是高质量反转候选
+        return None
+
+    return {
+        "rev_pts":     pts,
+        "rev_details": details,
+        "boll_pct":    bp,
+        "wk":          wk,
+        "mk":          mk,
+        "dim_tech":    dim_tech,
+        "dim_cycle":   dim_cycle,
+        "dim_fund":    dim_fund,
+        "dim_policy":  dim_policy,
+        "dim_senti":   dim_senti,
+    }
 
 
 def calc_position(sig: str, info: dict, regime: str) -> int:
@@ -773,7 +1003,72 @@ def _signal_line(r: dict) -> str:
     )
 
 
-def build_card(results: list[dict], regime: str, ts: str, ctx: dict | None = None) -> dict:
+def _dim_bar(score: int, max_score: int, label: str) -> str:
+    """单维度得分进度条：label [████░░] n/max"""
+    filled = round(score / max_score * 5) if max_score > 0 else 0
+    bar = "█" * filled + "░" * (5 - filled)
+    return f"{label}[{bar}]{score}/{max_score}"
+
+
+def _reversal_line(r: dict) -> str:
+    ind  = r["ind"]
+    info = r["info"]
+    pts  = r["rev_pts"]
+    wk   = r.get("wk", {})
+    mk   = r.get("mk", {})
+    bp   = r.get("boll_pct", 0.5)
+
+    # 综合星级（满分18，每3分一星，最多5星）
+    stars = "⭐" * min(pts // 3, 5)
+
+    # 5维度得分条
+    d_tech   = r.get("dim_tech",   0)
+    d_cycle  = r.get("dim_cycle",  0)
+    d_fund   = r.get("dim_fund",   0)
+    d_policy = r.get("dim_policy", 0)
+    d_senti  = r.get("dim_senti",  0)
+    radar = (
+        f"{_dim_bar(d_tech,  6, '技术')}  "
+        f"{_dim_bar(d_cycle, 4, '周期')}  "
+        f"{_dim_bar(d_fund,  2, '资金')}  "
+        f"{_dim_bar(d_policy,4, '政策')}  "
+        f"{_dim_bar(d_senti, 2, '情绪')}"
+    )
+
+    boll_line = (
+        f"Boll下轨={ind['boll_lower']:.2f}  上轨={ind['boll_upper']:.2f}"
+        f"  价格位于{bp:.0%}位"
+    )
+    weekly_str = (
+        "金叉✅" if wk.get("golden") else
+        "即将金叉🔔" if wk.get("pre_cross") else
+        "零轴↑" if wk.get("above_zero") else
+        "偏弱⚠️"
+    ) if wk.get("ok") else "—"
+    monthly_str = (
+        "站MA6✅" if mk.get("above_ma6") else
+        "MA6支撑" if mk.get("dif_positive") else
+        "改善中" if mk.get("dif_rising") else "偏弱"
+    ) if mk.get("ok") else "—"
+
+    flow = ind.get("main_force_flow", 0.0)
+    flow_str = f"{'净流入💰' if flow>0 else '净流出'}{abs(flow):.1f}亿" if abs(flow) >= 0.1 else "中性"
+
+    details_str = "、".join(r["rev_details"])
+
+    return (
+        f"🔄 **{r['name']}**（{r['code']}）｜{info.get('signal_3d','—')} {info.get('theme','')}  "
+        f"{stars}  **{pts}/18分**\n"
+        f"  {radar}\n"
+        f"  价格 **{ind['close']:.2f}**  RSI={ind['rsi']:.0f}  量比={ind['vol_ratio']:.1f}x  主力{flow_str}\n"
+        f"  {boll_line}\n"
+        f"  周线: {weekly_str}  ｜  月线: {monthly_str}\n"
+        f"  ✅ {details_str}"
+    )
+
+
+def build_card(results: list[dict], regime: str, ts: str,
+               ctx: dict | None = None, reversals: list[dict] | None = None) -> dict:
     color       = REGIME_COLOR.get(regime, "blue")
     regime_desc = REGIME_LABEL.get(regime, regime)
     max_pos     = REGIME_STOCK_MAX.get(regime, 0)
@@ -805,7 +1100,7 @@ def build_card(results: list[dict], regime: str, ts: str, ctx: dict | None = Non
 
     # 情绪过热时：BUY_WATCH 降级为观察，BUY_STRONG 保留置顶（加警示标题）
     if timing_blocked:
-        near_buys = near_buys + buys_w
+        near_buys = sorted(near_buys + buys_w, key=lambda r: -r["score"])
         buys_w    = []
 
     def _sec(title: str, items: list[dict]) -> list[dict]:
@@ -875,10 +1170,19 @@ def build_card(results: list[dict], regime: str, ts: str, ctx: dict | None = Non
         elements.append({"tag": "div", "text": {"tag": "lark_md",
                                                   "content": "暂无有效信号"}})
 
+    # ── 底部反转候选 ────────────────────────────────────────────────────
+    if reversals:
+        rev_body = "\n\n".join(_reversal_line(r) for r in reversals)
+        elements += [
+            {"tag": "div", "text": {"tag": "lark_md",
+                                     "content": f"**🔄 ━━ 底部反转候选（MACD/Boll/周月K多维确认）━━**\n{rev_body}"}},
+            {"tag": "hr"},
+        ]
+
     elements.append({
         "tag": "note",
         "elements": [{"tag": "plain_text",
-                      "content": "个股池择时 ｜ 止损触及须当日执行 ｜ 单股仓位≤集群上限"}],
+                      "content": "个股池择时 ｜ 止损触及须当日执行 ｜ 单股仓位≤集群上限 ｜ 反转候选仅供参考，需等日线信号确认"}],
     })
 
     return {
@@ -910,21 +1214,30 @@ def push_feishu(card: dict, dry: bool = False) -> None:
                     print(txt[:400])
                     print()
         return
-    try:
-        for url in FEISHU_WEBHOOKS:
-            r = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(card, ensure_ascii=False),
-                timeout=10,
-            )
-            res = r.json()
-            if res.get("code") == 0 or res.get("StatusCode") == 0:
-                log.info(f"飞书推送成功: {url[-8:]}")
-            else:
-                log.warning(f"飞书返回({url[-8:]}): {res}")
-    except Exception as e:
-        log.error(f"飞书推送失败: {e}")
+    payload = json.dumps(card, ensure_ascii=False)
+    for url in FEISHU_WEBHOOKS:
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    data=payload,
+                    timeout=10,
+                )
+                res = r.json()
+                if res.get("code") == 0 or res.get("StatusCode") == 0:
+                    log.info(f"飞书推送成功: {url[-8:]}")
+                    break
+                elif res.get("code") == 11232:
+                    wait = (attempt + 1) * 5
+                    log.warning(f"飞书限流({url[-8:]}), {wait}s后重试({attempt+1}/3)...")
+                    time.sleep(wait)
+                else:
+                    log.warning(f"飞书返回({url[-8:]}): {res}")
+                    break
+            except Exception as e:
+                log.error(f"飞书推送异常({url[-8:]}): {e}")
+                break
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -958,10 +1271,11 @@ def main(dry: bool = False, force: bool = False) -> None:
     flow_summary = {k: v for k, v in stock_flows.items() if abs(v) >= 0.3}
     log.info(f"个股主力流向（有效值）: {flow_summary}")
 
-    results: list[dict] = []
+    results:   list[dict] = []
+    reversals: list[dict] = []
 
     for code, info in STOCK_UNIVERSE.items():
-        df = fetch_kline(code)
+        df = fetch_kline(code)          # count=300，约14个月日线
         if df is None:
             log.warning(f"{code} {info['name']} K线获取失败")
             continue
@@ -972,6 +1286,18 @@ def main(dry: bool = False, force: bool = False) -> None:
             continue
 
         ind["main_force_flow"] = stock_flows.get(code, 0.0)
+
+        # 底部反转候选检测（传入info/ctx以启用政策+情绪维度）
+        rev = check_reversal(ind, df, info=info, ctx=ctx)
+        if rev is not None:
+            reversals.append({
+                "code":  code,
+                "name":  info["name"],
+                "info":  info,
+                "ind":   ind,
+                **rev,
+            })
+
         score, reasons = score_stock(ind, info)
 
         # R4：禁止个股新多
@@ -980,15 +1306,24 @@ def main(dry: bool = False, force: bool = False) -> None:
 
         sig  = signal_type(score)
 
-        # BUY_WATCH 质量过滤：★☆☆ 单维共振不够强，降级为 HOLD
+        # BUY_WATCH 质量过滤：★☆☆ 单维共振不够强，降级为 HOLD（BUY_WATCH阈值已提至5，此处兜底）
         if sig == "BUY_WATCH" and info.get("signal_3d", "★☆☆") == "★☆☆":
             sig = "HOLD"
             reasons.append("单维共振(★☆☆)，等待信号强化")
 
-        # SELL_STOP 3日确认：连续跌破MA60不满3日时降级为REDUCE（回测:止损后反弹+9.33%）
-        if sig == "SELL_STOP" and ind.get("consec_below_ma60", 0) < 3:
-            sig = "REDUCE"
-            reasons.append(f"MA60跌破{ind.get('consec_below_ma60',0)}日未满3日确认，降级为减仓")
+        # SELL_STOP 4日确认 + RSI超卖豁免
+        # 2026-05回测: SELL_STOP后T+5均收+6.32%，止损后股票大幅反弹，说明止损过敏
+        # 修复1：确认天数3→4（需连续4日跌破MA60）
+        # 修复2：RSI<25深度超卖时暂缓止损（底部卖飞风险高）
+        rsi_now = ind.get("rsi", 50)
+        consec = ind.get("consec_below_ma60", 0)
+        if sig == "SELL_STOP":
+            if rsi_now < 25:
+                sig = "REDUCE"
+                reasons.append(f"RSI深度超卖({rsi_now:.0f}<25)，暂缓止损降为减仓")
+            elif consec < 4:
+                sig = "REDUCE"
+                reasons.append(f"MA60跌破{consec}日未满4日确认，降级为减仓")
 
         pos  = calc_position(sig, info, regime)
         stop = calc_stop(ind)
@@ -1014,10 +1349,12 @@ def main(dry: bool = False, force: bool = False) -> None:
         log.info("无有效结果，跳过推送")
         return
 
-    order = {"SELL_STOP": 0, "REDUCE": 1, "BUY_STRONG": 2, "BUY_WATCH": 3, "HOLD": 4}
-    results.sort(key=lambda r: (order.get(r["signal"], 9), -r["score"]))
+    results.sort(key=lambda r: -r["score"])
 
-    card = build_card(results, regime, ts, ctx=ctx)
+    reversals.sort(key=lambda r: -r["rev_pts"])
+    log.info(f"底部反转候选: {len(reversals)} 只 — {[r['name'] for r in reversals]}")
+
+    card = build_card(results, regime, ts, ctx=ctx, reversals=reversals)
     push_feishu(card, dry=dry)
 
     snap = _DIR / "logs" / f"stock_timing_{today}.json"

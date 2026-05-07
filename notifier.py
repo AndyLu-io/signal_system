@@ -14,6 +14,7 @@ from config import (FEISHU_WEBHOOK, FEISHU_WEBHOOKS, SIGNAL_BUY_STRONG, SIGNAL_B
                     SIGNAL_HOLD, SIGNAL_REDUCE, SIGNAL_SELL_STOP, SIGNAL_AVOID,
                     DEFENSIVE_ROTATION_POOL)
 from rotation_advisor import format_rotation_card_md as _fmt_rotation
+import etf_reversal
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ def build_card_content(
     sentiment: _Optional[object] = None,
     rotation: _Optional[object] = None,
     data_health: _Optional[object] = None,
+    reversals: _Optional[list] = None,
 ) -> dict:
     """构建飞书 Interactive Card 消息体"""
 
@@ -219,6 +221,7 @@ def build_card_content(
                     "text": {"tag": "lark_md",
                              "content": data_health.to_summary_line()},
                 }] if data_health is not None else []),
+                *(etf_reversal.build_reversal_section(reversals) if reversals else []),
                 {
                     "tag": "note",
                     "elements": [
@@ -242,11 +245,13 @@ def send_signal(
     sentiment: _Optional[object] = None,
     rotation: _Optional[object] = None,
     data_health: _Optional[object] = None,
+    reversals: _Optional[list] = None,
 ) -> bool:
     if run_date is None:
         run_date = datetime.today().strftime("%Y-%m-%d")
 
-    card = build_card_content(regime, regime_score, signals, risk_summary, run_date, sentiment, rotation, data_health)
+    card = build_card_content(regime, regime_score, signals, risk_summary, run_date,
+                              sentiment, rotation, data_health, reversals)
 
     targets = FEISHU_WEBHOOKS if webhook == FEISHU_WEBHOOK else [webhook]
     success = False

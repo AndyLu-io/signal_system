@@ -489,26 +489,81 @@ def _format_realtime_sections(reading, position_alerts: list) -> list:
                 + (f"\n    *{trigger_str}*" if trigger_str else "")
             )
 
-        note_weak = f"\n\n*另有 {len(weak)} 个一般机会（★），观察为主*" if weak else ""
+        # 一般机会（★）也完整展示，只是换图标和标注"轻度"
+        weak_lines = []
+        for s in weak:
+            ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
+            entry_lo = round(ma20 * 0.992, 3)
+            entry_hi = round(ma20 * 1.008, 3)
+            stop_p   = round(ma20 * 0.91,  3)
+            target   = round(ma20 * 1.08,  3)
+            flow_str = ""
+            if abs(s.main_force_flow) >= 0.1:
+                arrow = "↑" if s.main_force_flow > 0 else "↓"
+                flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
+            trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
+            weak_lines.append(
+                f"🟡 **{s.name}**（{s.code}）\n"
+                f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
+                f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
+                f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
+                + (f"\n    *{trigger_str}*" if trigger_str else "")
+            )
+
+        weak_section = ("\n\n**⬇️ 一般机会（轻度超卖，可小仓观察）**\n\n" + "\n\n".join(weak_lines)) if weak_lines else ""
         header = f"**⚡ 实时买入机会**\n\n{panic_prefix}"
-        sections += [md(header + "\n\n".join(lines) + note_weak), {"tag": "hr"}]
+        sections += [md(header + "\n\n".join(lines) + weak_section), {"tag": "hr"}]
 
     elif reading.market_panic:
-        # 大盘恐慌但股池暂无个股信号 → 提示但说明原因
-        sections += [
-            md(
-                f"**😱 大盘恐慌：{reading.market_note}**\n"
-                f"股池品种暂无达标技术面低点，等待量能止稳后的低吸机会"
-                + (f"\n\n*有 {len(weak)} 个品种轻度超卖，可关注*" if weak else "")
-            ),
-            {"tag": "hr"},
-        ]
+        # 大盘恐慌但无强信号 → 展示 weak 完整详情
+        panic_lines = [f"**😱 大盘恐慌：{reading.market_note}**\n等待量能止稳后的低吸机会"]
+        if weak:
+            panic_lines.append("**⬇️ 一般机会（轻度超卖，可小仓关注）**")
+            for s in weak:
+                ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
+                entry_lo = round(ma20 * 0.992, 3)
+                entry_hi = round(ma20 * 1.008, 3)
+                stop_p   = round(ma20 * 0.91,  3)
+                target   = round(ma20 * 1.08,  3)
+                flow_str = ""
+                if abs(s.main_force_flow) >= 0.1:
+                    arrow = "↑" if s.main_force_flow > 0 else "↓"
+                    flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
+                trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
+                panic_lines.append(
+                    f"🟡 **{s.name}**（{s.code}）\n"
+                    f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
+                    f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
+                    f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
+                    + (f"\n    *{trigger_str}*" if trigger_str else "")
+                )
+        sections += [md("\n\n".join(panic_lines)), {"tag": "hr"}]
 
     else:
-        note = "**⚪ 暂无买入机会**\n股池品种未到技术低点，继续等待回调"
         if weak:
-            note += f"\n\n*{len(weak)} 个品种轻度超卖（RSI偏低），可关注但暂不建仓*"
-        sections += [md(note), {"tag": "hr"}]
+            # 无强信号但有 weak → 也完整展示
+            weak_only_lines = ["**⚪ 暂无强买入机会**\n\n**⬇️ 一般机会（轻度超卖，可小仓观察）**"]
+            for s in weak:
+                ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
+                entry_lo = round(ma20 * 0.992, 3)
+                entry_hi = round(ma20 * 1.008, 3)
+                stop_p   = round(ma20 * 0.91,  3)
+                target   = round(ma20 * 1.08,  3)
+                flow_str = ""
+                if abs(s.main_force_flow) >= 0.1:
+                    arrow = "↑" if s.main_force_flow > 0 else "↓"
+                    flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
+                trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
+                weak_only_lines.append(
+                    f"🟡 **{s.name}**（{s.code}）\n"
+                    f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
+                    f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
+                    f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
+                    + (f"\n    *{trigger_str}*" if trigger_str else "")
+                )
+            sections += [md("\n\n".join(weak_only_lines)), {"tag": "hr"}]
+        else:
+            sections += [md("**⚪ 暂无买入机会**\n股池品种未到技术低点，继续等待回调"), {"tag": "hr"}]
 
     return sections
 
@@ -795,15 +850,17 @@ def _format_etf_guidance(detail: dict) -> str:
 
         if watch_list:
             lines.append("**🔵 今日只观察·等回调MA5附近**")
-            for s, tr in watch_list[:8]:
+            for s, tr in watch_list:          # 移除 [:8] 限制，全量展示
                 ma5  = tr.get("ma5_dev_pct", 0.0)
                 risk = tr.get("risk_level", "SAFE")
                 wt   = s.get("weight_pct", 0)
-                zone = "✓ 当前入场区" if abs(ma5) <= 1.0 else f"距MA5 {ma5:+.1f}%"
-                flag = " ⚡略偏高" if risk == "CAUTION" else ""
+                zone = "✓ 入场区" if abs(ma5) <= 1.0 else f"距MA5 {ma5:+.1f}%"
+                flag = " ⚡偏高" if risk == "CAUTION" else ""
+                top2 = sorted(s.get("factors", {}).items(), key=lambda x: -x[1])[:2]
+                factor_str = " ".join(f"{k}{int(v)}" for k, v in top2) if top2 else ""
                 lines.append(
                     f"• **{s['name']}**（{s['code']}）{s['tier']}/{int(s['composite'])}分"
-                    f"　{zone}{flag}　仓位上限{wt:.1f}%"
+                    f"　{zone}{flag}　上限{wt:.1f}%　[{factor_str}]"
                 )
 
     elif not has_restriction:
@@ -820,22 +877,176 @@ def _format_etf_guidance(detail: dict) -> str:
                 f"  MA5偏{ma5:+.1f}% MA20偏{ma20:+.1f}%  *等{regime}→R1或升A级解锁*"
             )
 
-    # ── 一般观察（低分/禁配品种，不操作但可跟踪）────────────────────────────────
-    show_others = [s for s, _ in other_holds if s["composite"] >= 48]
-    if show_others or avoid_list:
-        lines.append("\n**━━━ 👁 一般观察 ━━━**")
-        if show_others:
-            names = "  ".join(
-                f"{s['name']}({int(s['composite'])})" for s in show_others[:10]
+    # ── ETF全景扫描（C级：评分+趋势，让用户看清全池状态）────────────────────────
+    c_show = [(s, tr) for s, tr in other_holds if s["composite"] >= 44]
+    c_show.sort(key=lambda x: -x[0]["composite"])
+    if c_show or avoid_list:
+        lines.append("\n**━━━ 📡 ETF全景扫描 ━━━**")
+
+    if c_show:
+        lines.append("**C级·持仓观察（暂不加仓，跟踪趋势）**")
+        for s, tr in c_show:
+            ma5  = tr.get("ma5_dev_pct", 0.0)
+            risk = tr.get("risk_level", "SAFE")
+            consec = tr.get("consec_up", 0)
+            trend_icon = "📈" if consec >= 2 else ("📉" if ma5 < -3 else "➡️")
+            risk_tag = " ⚠️高位" if risk in ("CAUTION", "DANGER") else ""
+            lines.append(
+                f"  {trend_icon} {s['name']}（{s['code']}）{int(s['composite'])}分"
+                f"  MA5偏{ma5:+.1f}%{risk_tag}"
             )
-            lines.append(f"C级观察（不配置）：{names}")
-        if avoid_list:
-            names = "  ".join(
-                f"{s['name']}({s['tier']}/{int(s['composite'])})" for s, _ in avoid_list[:8]
-            )
-            lines.append(f"禁配品种：{names}")
+
+    if avoid_list:
+        lines.append("**D级·禁配品种（不操作）**")
+        names = "  ".join(
+            f"{s['name']}({int(s['composite'])})" for s, _ in avoid_list
+        )
+        lines.append(f"  {names}")
+
+    # ── 板块热力表（按 cluster 聚合，一行一板块）────────────────────────────────
+    try:
+        from config import ETF_UNIVERSE as _EU
+        _CLUSTER_SHORT = {
+            "ai_compute":   "🤖 AI算力",
+            "power_export": "⚡ 电力设备",
+            "space_robot":  "🚀 卫星·机器人",
+            "new_energy":   "🌱 新能源",
+            "optics":       "💡 光模块",
+            "semicon":      "💾 半导体设计",
+            "defensive":    "🛡️ 红利防御",
+            "finance":      "🏦 金融",
+            "broad_market": "📊 宽基",
+            "overseas":     "🌏 海外",
+            "commodity":    "⛏️ 大宗商品",
+            "agriculture":  "🌾 农业",
+        }
+        _SIG_ORDER = ["BUY_STRONG", "BUY_WATCH", "HOLD", "REDUCE", "SELL_STOP", "AVOID"]
+        _SIG_TAG = {
+            "BUY_STRONG": "**强买**", "BUY_WATCH": "关注买",
+            "HOLD": "观察",         "REDUCE": "减仓",
+            "SELL_STOP": "**止损**", "AVOID": "回避",
+        }
+        cmap: dict[str, list[dict]] = {}
+        for s in signals:
+            cl = _EU.get(s["code"], {}).get("cluster", "")
+            if cl:
+                cmap.setdefault(cl, []).append(s)
+        if cmap:
+            rows: list[tuple[int, str]] = []
+            for cl, cs in cmap.items():
+                best_s = max(cs, key=lambda x: x["composite"])
+                best_score = int(best_s["composite"])
+                best_sig = next((p for p in _SIG_ORDER if p in {x["signal"] for x in cs}), "AVOID")
+                label = _CLUSTER_SHORT.get(cl, cl)
+                sig_tag = _SIG_TAG.get(best_sig, best_sig)
+                rows.append((-best_score, f"  {label} {best_s['tier']}/{best_score}  {best_s['name']}[{sig_tag}]"))
+            rows.sort(key=lambda x: x[0])
+            lines.append("\n**━━━ 🗺️ 板块热力表 ━━━**")
+            for _, row in rows:
+                lines.append(row)
+    except Exception:
+        pass
 
     return "\n".join(lines)
+
+
+# ─── 集群板块策略（动态，用于 generate_guidance 第五节）────────────────────────
+
+_CLUSTER_LABELS: dict[str, str] = {
+    "ai_compute":   "🤖 AI算力·半导体",
+    "power_export": "⚡ 电力设备·电网",
+    "space_robot":  "🚀 卫星·机器人·工业母机",
+    "new_energy":   "🌱 新能源·光伏·储能",
+    "optics":       "💡 光模块·光器件",
+    "semicon":      "💾 半导体设计",
+    "defensive":    "🛡️ 红利·防御",
+    "finance":      "🏦 金融·银行·券商",
+    "broad_market": "📊 宽基指数",
+    "overseas":     "🌏 海外·港股",
+    "commodity":    "⛏️ 大宗商品·资源",
+    "agriculture":  "🌾 农业",
+}
+
+_SIG_PRIORITY = ["BUY_STRONG", "BUY_WATCH", "HOLD", "REDUCE", "SELL_STOP", "AVOID"]
+
+
+def _cluster_note(sigs: list[dict], timing_block: bool) -> str:
+    sig_set = {s["signal"] for s in sigs}
+    best_sig = next((p for p in _SIG_PRIORITY if p in sig_set), "AVOID")
+    best_score = max(s["composite"] for s in sigs)
+    if best_sig == "BUY_STRONG":
+        return "🟢 强势板块，今日可建仓"
+    if best_sig == "BUY_WATCH":
+        return "🔵 今日可小仓试探"
+    if best_sig == "HOLD":
+        if timing_block:
+            return "⏳ 情绪过热，等回调5日线再介入"
+        if best_score >= 70:
+            return "🔵 高分板块，等MA5回踩即可建仓"
+        if best_score >= 55:
+            return "⏳ B级板块，耐心等待回踩"
+        return "⚪ C级·暂未启动，跟踪观察"
+    if best_sig in ("REDUCE", "SELL_STOP"):
+        return "🟡 持仓减仓，不加新仓"
+    return "⛔ 空仓回避"
+
+
+def _format_cluster_strategy(detail: dict) -> str:
+    """按 cluster 分组，生成动态板块策略（用于每日操作指导 section 五）"""
+    if not detail:
+        return "（信号数据未生成，待08:30 main.py运行后可用）"
+    try:
+        from config import ETF_UNIVERSE as _EU
+    except ImportError:
+        return "（config.ETF_UNIVERSE 未找到）"
+
+    signals      = detail.get("signals", [])
+    timing_risks = detail.get("timing_risks", {})
+    timing_block = detail.get("sentiment", {}).get("timing_block", False)
+
+    cluster_map: dict[str, list[dict]] = {}
+    for s in signals:
+        cl = _EU.get(s["code"], {}).get("cluster", "")
+        if cl:
+            cluster_map.setdefault(cl, []).append(s)
+
+    if not cluster_map:
+        return "（集群配置未找到，请检查 ETF_UNIVERSE cluster 字段）"
+
+    sorted_clusters = sorted(
+        cluster_map.items(),
+        key=lambda x: -max(s["composite"] for s in x[1]),
+    )
+
+    _sig_tag = {
+        "BUY_STRONG": "🟢强买",  "BUY_WATCH": "🔵关注买",
+        "HOLD": "持仓观察",       "REDUCE": "🟡减仓",
+        "SELL_STOP": "🔴止损",    "AVOID": "⛔回避",
+    }
+
+    lines: list[str] = []
+    alpha_idx = 0
+    for cluster, sigs in sorted_clusters:
+        best_score = max(s["composite"] for s in sigs)
+        if best_score < 40:
+            continue
+        best_tier = max(sigs, key=lambda s: s["composite"])["tier"]
+        label = _CLUSTER_LABELS.get(cluster, cluster)
+        prefix = chr(ord("A") + alpha_idx) if alpha_idx < 26 else str(alpha_idx + 1)
+        alpha_idx += 1
+        lines.append(f"\n### {prefix}. {label}（{best_tier}级·{best_score:.0f}分）")
+        for s in sorted(sigs, key=lambda x: -x["composite"])[:6]:
+            tr   = timing_risks.get(s["code"], {})
+            ma5  = tr.get("ma5_dev_pct", 0.0)
+            tag  = _sig_tag.get(s["signal"], s["signal"])
+            ma5_str = f"  MA5偏{ma5:+.1f}%" if abs(ma5) >= 0.5 else ""
+            lines.append(
+                f"- {s['name']}（{s['code']}）{s['tier']}/{int(s['composite'])}分"
+                f"  {tag}{ma5_str}"
+            )
+        lines.append(f"> {_cluster_note(sigs, timing_block)}")
+
+    return "\n".join(lines) if lines else "（今日无有效板块信号）"
 
 
 # ─── 生成操作指导 ─────────────────────────────────────────────────────────────
@@ -902,19 +1113,7 @@ def generate_guidance(
 
 ## 五、主线板块策略
 
-### A. AI算力（高景气高位）
-- 只买回调（5日线附近），不追高
-- 龙头（光模块/半导体）涨停才跟ETF
-- 止损：-8%；止盈：随时
-
-### B. 电力设备（"算力→电力"主线）
-- **159326 电网设备ETF** — 首选，回调买入
-- 159611 电力ETF — 次选，电网不涨时不追电力
-- 底层逻辑：数据中心爆发→变压器/特高压供需缺口
-
-### C. 周期/出海
-- 汇率>7.28时暂缓出海链操作
-- 等政策催化或龙头明确信号
+{_format_cluster_strategy(signal_detail)}
 
 ---
 
@@ -1177,6 +1376,13 @@ def main():
               f"流出{sum(1 for v in sig_flows.values() if v<0)}只")
     if position_alerts:
         print(f"[持仓] {len(position_alerts)} 个预警: {[a['code'] for a in position_alerts]}")
+
+    # 保存每日操作指导 Markdown
+    try:
+        md_content = generate_guidance(macro, regime, regime_desc, bank_signal, signal_detail, north_summary)
+        save_md(md_content)
+    except Exception as e:
+        print(f"[WARN] 操作指导保存失败: {e}")
 
     # 推送飞书（遇限流最多重试3次，间隔30s/60s）
     try:

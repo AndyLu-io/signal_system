@@ -70,7 +70,7 @@ logger = logging.getLogger("index_timing")
 
 # ─── 数据获取 ──────────────────────────────────────────────────────────────────
 
-def _fetch_etf_df(code: str, days: int = 65):
+def _fetch_etf_df(code: str, days: int = 300):
     """用腾讯K线获取ETF日线数据（sh/sz前缀由 _market() 自动检测）"""
     prefix = _market(code)
     sym = f"{prefix}{code}"
@@ -95,6 +95,83 @@ def _calc_rsi(closes: np.ndarray, period: int = 14) -> float:
         return 100.0
     rs = avg_gain / avg_loss
     return round(100.0 - 100.0 / (1.0 + rs), 1)
+
+
+def _compute_macd_boll(closes: np.ndarray) -> dict:
+    """MACD(12,26,9) + Bollinger(20,2σ) from a closes array."""
+    if len(closes) < 35:
+        return {}
+
+    def _ema(arr: np.ndarray, period: int) -> np.ndarray:
+        result = np.empty(len(arr))
+        k = 2.0 / (period + 1)
+        result[0] = arr[0]
+        for i in range(1, len(arr)):
+            result[i] = arr[i] * k + result[i - 1] * (1 - k)
+        return result
+
+    ema12 = _ema(closes, 12)
+    ema26 = _ema(closes, 26)
+    dif   = ema12 - ema26
+    dea   = _ema(dif, 9)
+    bar   = (dif - dea) * 2
+
+    d, e   = float(dif[-1]),  float(dea[-1])
+    dp, ep = float(dif[-2]),  float(dea[-2])
+    bar_now  = float(bar[-1])
+    bar_prev = float(bar[-2])
+
+    cross = None
+    if dp < ep and d >= e:
+        cross = "golden"
+    elif dp > ep and d <= e:
+        cross = "death"
+
+    pre_golden_cross = d < e and d > dp and (e - d) < (ep - dp)
+
+    boll_upper = boll_lower = boll_pct = None
+    if len(closes) >= 20:
+        ma20  = float(closes[-20:].mean())
+        std20 = float(closes[-20:].std())
+        boll_upper = ma20 + 2 * std20
+        boll_lower = ma20 - 2 * std20
+        width = boll_upper - boll_lower
+        boll_pct = float((closes[-1] - boll_lower) / width) if width > 0 else 0.5
+
+    return {
+        "dif": d, "dea": e,
+        "bar_now": bar_now, "bar_prev": bar_prev,
+        "cross": cross,
+        "pre_golden_cross": pre_golden_cross,
+        "boll_upper": boll_upper, "boll_lower": boll_lower, "boll_pct": boll_pct,
+    }
+
+
+def _weekly_macd_state_from_closes(closes: np.ndarray) -> dict:
+    """Resample daily closes to weekly (last of each 5-day window) and return MACD state."""
+    if len(closes) < 60:
+        return {"ok": False}
+    weekly = closes[::-1][::5][::-1]
+    if len(weekly) < 35:
+        return {"ok": False}
+    mb = _compute_macd_boll(weekly)
+    if not mb:
+        return {"ok": False}
+    return {
+        "ok":         True,
+        "golden":     mb.get("cross") == "golden",
+        "pre_cross":  mb.get("pre_golden_cross", False),
+        "above_zero": mb.get("dif", 0) > 0,
+        "bar_rising": mb.get("bar_now", 0) > mb.get("bar_prev", 0),
+        "dif":        mb.get("dif", 0),
+        "dea":        mb.get("dea", 0),
+    }
+
+
+def _dim_bar(score: int, max_score: int, label: str) -> str:
+    filled = round(score / max_score * 5) if max_score > 0 else 0
+    bar = "█" * filled + "░" * (5 - filled)
+    return f"{label}[{bar}]{score}/{max_score}"
 
 
 def _score_trend(closes: np.ndarray) -> tuple[float, str, dict]:
@@ -428,7 +505,188 @@ REGIME_LABEL = {"R1": "趋势牛市", "R2": "震荡市", "R3": "轮动市", "R4"
 REGIME_COLOR = {"R1": "green", "R2": "blue", "R3": "yellow", "R4": "red"}
 
 
-def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time: str) -> dict:
+def check_etf_reversal(
+    timing: "IndexTiming",
+    closes: np.ndarray,
+    north_flow,
+    margin,
+    breadth: dict,
+    macro_score: float,
+) -> dict | None:
+    """
+    ETF底部反转候选筛选（满分18分，≥9分入选）。
+
+    硬门槛：① boll_pct < 0.50  ② MACD有改善迹象
+
+    技术面（max 6）: 日线MACD + Boll位置 + RSI
+    周期面（max 4）: 周线MACD + 趋势强度
+    资金面（max 4）: 北向5日净流入 + 两融余额变化
+    情绪面（max 4）: 宏观评分→情绪温度 + 涨跌停宽度
+    """
+    mb = _compute_macd_boll(closes)
+    if not mb:
+        return None
+
+    bp = mb.get("boll_pct")
+    if bp is None or bp >= 0.50:
+        return None
+
+    bar_now  = mb.get("bar_now", 0)
+    bar_prev = mb.get("bar_prev", 0)
+    macd_improving = (
+        mb.get("pre_golden_cross", False) or
+        mb.get("cross") == "golden" or
+        (bar_now < 0 and bar_now > bar_prev)
+    )
+    if not macd_improving:
+        return None
+
+    pts      = 0
+    details  = []
+    dim_tech = dim_cycle = dim_fund = dim_senti = 0
+
+    # ── 技术面 ────────────────────────────────────────────────────
+    if mb.get("pre_golden_cross"):
+        pts += 2; dim_tech += 2; details.append("日线MACD即将金叉🔔")
+    elif mb.get("cross") == "golden":
+        pts += 1; dim_tech += 1; details.append("日线MACD刚金叉")
+    else:
+        pts += 1; dim_tech += 1; details.append("日线MACD绿柱收缩")
+
+    if bp <= 0.15:
+        pts += 2; dim_tech += 2; details.append(f"Boll触底({bp:.0%})")
+    elif bp <= 0.30:
+        pts += 1; dim_tech += 1; details.append(f"Boll接近下轨({bp:.0%})")
+
+    rsi = _calc_rsi(closes)
+    if rsi < 35:
+        pts += 2; dim_tech += 2; details.append(f"RSI超卖{rsi:.0f}")
+    elif rsi < 45:
+        pts += 1; dim_tech += 1; details.append(f"RSI偏低{rsi:.0f}")
+
+    # ── 周期面 ────────────────────────────────────────────────────
+    wk = _weekly_macd_state_from_closes(closes)
+    if wk.get("ok"):
+        if wk.get("golden") or wk.get("pre_cross"):
+            pts += 2; dim_cycle += 2
+            details.append("周线MACD" + ("金叉✅" if wk.get("golden") else "即将金叉🔔"))
+        elif wk.get("above_zero"):
+            pts += 1; dim_cycle += 1; details.append("周线DIF零轴以上")
+        elif wk.get("bar_rising"):
+            pts += 1; dim_cycle += 1; details.append("周线MACD柱改善")
+
+    ts = timing.trend_score
+    if ts >= 60:
+        pts += 2; dim_cycle += 2; details.append(f"趋势支撑({ts:.0f}分)")
+    elif ts >= 45:
+        pts += 1; dim_cycle += 1; details.append(f"趋势中性({ts:.0f}分)")
+
+    # ── 资金面 ────────────────────────────────────────────────────
+    if north_flow is not None and hasattr(north_flow, "columns"):
+        net_s = north_flow["net_buy_billion"].dropna()
+        if len(net_s) >= 1:
+            north_5d = float(net_s.tail(5).sum())
+            if north_5d > 50:
+                pts += 2; dim_fund += 2; details.append(f"北向5日净流入{north_5d:.0f}亿🟢")
+            elif north_5d > 10:
+                pts += 1; dim_fund += 1; details.append(f"北向5日{north_5d:.0f}亿偏正")
+            elif north_5d < -30:
+                details.append(f"北向5日净流出{abs(north_5d):.0f}亿⚠️")
+
+    if margin is not None and len(margin) >= 5:
+        bal = margin["balance_billion"].dropna()
+        if len(bal) >= 5:
+            chg5 = float(bal.iloc[-1] - bal.iloc[-5])
+            if chg5 > 100:
+                pts += 2; dim_fund += 2; details.append(f"两融增加{chg5:.0f}亿💰")
+            elif chg5 > 20:
+                pts += 1; dim_fund += 1; details.append(f"两融小幅增加{chg5:.0f}亿")
+
+    # ── 情绪面 ────────────────────────────────────────────────────
+    # 宏观评分映射为情绪温度
+    if macro_score < 40:
+        senti_level = "COLD"
+        pts += 2; dim_senti += 2; details.append(f"宏观评分{macro_score:.0f}(COLD，最佳买点窗口)🟢")
+    elif macro_score < 55:
+        senti_level = "NORMAL"
+        pts += 2; dim_senti += 2; details.append(f"宏观评分{macro_score:.0f}(NORMAL)🟢")
+    elif macro_score < 65:
+        senti_level = "WARM"
+        pts += 1; dim_senti += 1; details.append(f"宏观评分{macro_score:.0f}(WARM)")
+    else:
+        senti_level = "HOT"
+        details.append(f"宏观评分{macro_score:.0f}(HOT)⚠️反转需等回落")
+
+    lu = breadth.get("limit_up", 0)
+    ld = breadth.get("limit_down", 1)
+    ratio = lu / max(ld, 1)
+    if ratio >= 5:
+        pts += 2; dim_senti += 2; details.append(f"市场宽度强({lu}/{ld})✅")
+    elif ratio >= 2:
+        pts += 1; dim_senti += 1; details.append(f"市场宽度{lu}/{ld}")
+
+    if pts < 9:
+        return None
+
+    return {
+        "rev_pts":    pts,
+        "rev_details": details,
+        "boll_pct":   bp,
+        "boll_upper": mb.get("boll_upper"),
+        "boll_lower": mb.get("boll_lower"),
+        "rsi":        rsi,
+        "wk":         wk,
+        "senti_level": senti_level,
+        "dim_tech":   dim_tech,
+        "dim_cycle":  dim_cycle,
+        "dim_fund":   dim_fund,
+        "dim_senti":  dim_senti,
+    }
+
+
+def _etf_reversal_line(timing: "IndexTiming", rev: dict) -> str:
+    pts  = rev["rev_pts"]
+    bp   = rev.get("boll_pct", 0.5)
+    rsi  = rev.get("rsi", 50)
+    wk   = rev.get("wk", {})
+
+    stars = "⭐" * min(pts // 3, 5)
+
+    radar = (
+        f"{_dim_bar(rev.get('dim_tech',  0), 6, '技术')}  "
+        f"{_dim_bar(rev.get('dim_cycle', 0), 4, '周期')}  "
+        f"{_dim_bar(rev.get('dim_fund',  0), 4, '资金')}  "
+        f"{_dim_bar(rev.get('dim_senti', 0), 4, '情绪')}"
+    )
+
+    bu, bl = rev.get("boll_upper"), rev.get("boll_lower")
+    boll_str = (
+        f"Boll下轨={bl:.3f}  上轨={bu:.3f}  位于{bp:.0%}位"
+        if bu and bl else f"Boll位于{bp:.0%}位"
+    )
+
+    weekly_str = (
+        "金叉✅" if wk.get("golden") else
+        "即将金叉🔔" if wk.get("pre_cross") else
+        "零轴↑" if wk.get("above_zero") else
+        "偏弱⚠️"
+    ) if wk.get("ok") else "—"
+
+    details_str = "、".join(rev["rev_details"])
+
+    return (
+        f"🔄 **{timing.name}**（{timing.code}）｜{timing.region}  "
+        f"{stars}  **{pts}/18分**\n"
+        f"  {radar}\n"
+        f"  价格 **{timing.current_price:.3f}**  RSI={rsi:.0f}  综合{timing.composite:.0f}分\n"
+        f"  {boll_str}\n"
+        f"  周线MACD: {weekly_str}\n"
+        f"  ✅ {details_str}"
+    )
+
+
+def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time: str,
+               reversals: list[dict] | None = None) -> dict:
     regime_label = REGIME_LABEL.get(regime, regime)
     color = REGIME_COLOR.get(regime, "blue")
 
@@ -511,18 +769,38 @@ def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time:
                         "content": macro_line,
                     },
                 },
-                {
-                    "tag": "note",
-                    "elements": [
-                        {
-                            "tag": "plain_text",
-                            "content": "ETF择时仅供参考，海外ETF受T+0及汇率影响，仓位需结合个人风险承受力。止损线触及请严格执行。",
-                        }
-                    ],
-                },
             ],
         },
     }
+
+    # ── 底部反转候选 ─────────────────────────────────────────────
+    if reversals:
+        rev_body = "\n\n".join(
+            _etf_reversal_line(r["timing"], r["rev"]) for r in reversals
+        )
+        card["card"]["elements"] += [
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "**🔄 ━━ ETF底部反转候选（MACD/Boll/周线多维确认）━━**\n\n"
+                        + rev_body
+                    ),
+                },
+            },
+        ]
+
+    card["card"]["elements"].append({
+        "tag": "note",
+        "elements": [
+            {
+                "tag": "plain_text",
+                "content": "ETF择时仅供参考，海外ETF受T+0及汇率影响，仓位需结合个人风险承受力。止损线触及请严格执行。",
+            }
+        ],
+    })
     return card
 
 
@@ -586,7 +864,8 @@ def run() -> None:
 
     # ── 各ETF评分 ────────────────────────────────────────────────
     regime = _read_regime()
-    timings: list[IndexTiming] = []
+    timings:   list[IndexTiming] = []
+    reversals: list[dict] = []
     for code, info in INDEX_UNIVERSE.items():
         # 海外ETF宏观资金用50中性基准（北向/两融/宽度不适用）
         m_score  = macro_score if info["region"] == "A股" else 50.0
@@ -605,12 +884,30 @@ def run() -> None:
                         f"趋势{t.trend_score:.0f} 动量{t.momentum_score:.0f} "
                         f"量能{t.volume_score:.0f} 资金{t.macro_score:.0f}")
 
+            # 底部反转候选检测（仅A股ETF有完整宏观数据）
+            df_etf = etf_dfs.get(code)
+            if df_etf is not None and len(df_etf) >= 35:
+                closes_full = df_etf["close"].values.astype(float)
+                rev = check_etf_reversal(
+                    t, closes_full,
+                    north_flow if info["region"] == "A股" else None,
+                    margin     if info["region"] == "A股" else None,
+                    breadth    if info["region"] == "A股" else {},
+                    m_score,
+                )
+                if rev is not None:
+                    reversals.append({"timing": t, "rev": rev})
+                    logger.info(f"    └─ 底部反转候选: {t.name} {rev['rev_pts']}/18分")
+
     if not timings:
         logger.error("无有效ETF数据，退出")
         return
 
+    reversals.sort(key=lambda r: -r["rev"]["rev_pts"])
+    logger.info(f"ETF底部反转候选: {len(reversals)} 只 — {[r['timing'].name for r in reversals]}")
+
     # ── 推送飞书 ─────────────────────────────────────────────────
-    card = build_card(timings, today_str, regime, time_str)
+    card = build_card(timings, today_str, regime, time_str, reversals=reversals)
     send_to_feishu(card)
 
     # ── 保存快照 ─────────────────────────────────────────────────

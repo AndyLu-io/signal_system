@@ -566,14 +566,10 @@ def get_market_breadth() -> dict:
         logger.warning(f"涨停池三次均失败: {e}")
 
     try:
-        df_down = _retry(lambda: ak.stock_dt_pool_now_em(date=today), attempts=2, delays=(3,))
+        df_down = _retry(lambda: ak.stock_zt_pool_dtgc_em(date=today), attempts=2, delays=(3,))
         limit_down = len(df_down) if df_down is not None else 0
-    except Exception:
-        try:
-            df_down = _retry(lambda: ak.stock_dt_pool_strong_em(date=today), attempts=2, delays=(3,))
-            limit_down = len(df_down) if df_down is not None else 0
-        except Exception:
-            pass
+    except Exception as e:
+        logger.warning(f"跌停池获取失败: {e}")
 
     return {
         "limit_up": limit_up,
