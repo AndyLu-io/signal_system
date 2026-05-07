@@ -37,7 +37,8 @@ logger = logging.getLogger("tail_main")
 
 
 def is_trading_day() -> bool:
-    return datetime.today().weekday() < 5
+    from utils import is_trading_day as _it
+    return _it()
 
 
 def _detect_scan_mode() -> tuple[str, float]:

@@ -37,10 +37,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, TypeVar, Callable
+from typing import Optional
 import requests
 import pandas as pd
 import akshare as ak
+
+from utils import retry as _retry, atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -50,34 +52,23 @@ _NORTH_MANUAL = Path(__file__).parent / "state" / "north_manual"
 _EM_HSGT_URL  = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 _EM_HSGT_TOKEN = "894050c76af8597a853f5b408b759f5d"
 
-T = TypeVar("T")
-
-
-def _retry(fn: Callable[[], T], attempts: int = 3, delays: tuple = (2, 5)) -> T:
-    """重试包装：最多 attempts 次，失败后按 delays 等待，最终仍失败则抛出最后一个异常。"""
-    last_exc: Exception = RuntimeError("unknown")
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:
-            last_exc = e
-            if i < len(delays):
-                logger.warning(f"第{i+1}次失败({e})，{delays[i]}s后重试...")
-                time.sleep(delays[i])
-    raise last_exc
-
 
 # ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def _market(code: str) -> str:
-    """判断交易所前缀：sz / sh（ETF + 个股）"""
+    """判断交易所前缀：sz / sh（ETF + 个股 + 指数）"""
     # 深市ETF：159xxx / 56xxxx（含561/562/563）
     if code.startswith("15") or code.startswith("56"):
         return "sz"
-    # 深市个股：0xxxxx（中小板）/ 3xxxxx（创业板）
+    # 深市个股：0xxxxx（中小板）/ 3xxxxx（创业板）/ 399xxx（深证指数）
     if code.startswith("0") or code.startswith("3"):
         return "sz"
     return "sh"
+
+
+def market_prefix(code: str) -> str:
+    """对外公开的交易所前缀工具（其他模块复用，避免重复实现）。"""
+    return _market(code)
 
 
 def _tencent_kline(symbol: str, count: int = 45) -> Optional[list]:
@@ -122,24 +113,48 @@ def _klines_to_df(klines: list) -> pd.DataFrame:
 
 # ─── 价格数据（腾讯） ──────────────────────────────────────────────────────────
 
-def get_etf_prices(codes: list[str], days: int = 40) -> dict[str, Optional[pd.DataFrame]]:
-    """返回 {code: DataFrame(date,open,close,high,low,volume,amount)}"""
-    result: dict[str, Optional[pd.DataFrame]] = {}
-    for code in codes:
+def get_etf_prices(
+    codes: list[str], days: int = 40, max_workers: int = 10
+) -> dict[str, Optional[pd.DataFrame]]:
+    """
+    并行抓取多只 ETF 日线 K 线。
+    返回 {code: DataFrame(date,open,close,high,low,volume,amount)}
+    """
+    def _one(code: str) -> tuple[str, Optional[pd.DataFrame]]:
         sym = f"{_market(code)}{code}"
         klines = _tencent_kline(sym, days + 5)
         if klines:
-            result[code] = _klines_to_df(klines).tail(days)
-        else:
-            logger.warning(f"ETF {code} 价格获取失败")
-            result[code] = None
+            return code, _klines_to_df(klines).tail(days)
+        logger.warning(f"ETF {code} 价格获取失败")
+        return code, None
+
+    result: dict[str, Optional[pd.DataFrame]] = {}
+    if not codes:
+        return result
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for fut in as_completed(pool.submit(_one, c) for c in codes):
+            code, df = fut.result()
+            result[code] = df
     return result
 
 
+def _index_market(index_code: str) -> str:
+    """
+    指数代码与 ETF 代码前缀规则不同：
+      000xxx → sh（沪市指数：沪深300/上证50/中证500）
+      399xxx → sz（深市指数：深证成指/创业板指/中小板指）
+    其余按通用 _market() 规则处理。
+    """
+    if index_code.startswith("000"):
+        return "sh"
+    if index_code.startswith("399"):
+        return "sz"
+    return _market(index_code)
+
+
 def get_index_prices(index_code: str, days: int = 40) -> Optional[pd.DataFrame]:
-    """沪深300=000300 / 中证500=000905"""
-    prefix = "sh" if index_code.startswith("0003") else "sh"
-    sym = f"sh{index_code}"
+    """沪深300=000300 / 中证500=000905 / 创业板指=399006"""
+    sym = f"{_index_market(index_code)}{index_code}"
     klines = _tencent_kline(sym, days + 5)
     if klines:
         return _klines_to_df(klines).tail(days)
@@ -181,10 +196,7 @@ def _load_north_cache() -> list[dict]:
 
 
 def _save_north_cache(records: list[dict]) -> None:
-    _NORTH_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    _NORTH_CACHE.write_text(
-        json.dumps(records[-30:], ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_json(_NORTH_CACHE, records[-30:])
 
 
 def _fetch_em_net_buy_today() -> Optional[float]:

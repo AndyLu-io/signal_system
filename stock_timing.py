@@ -25,23 +25,27 @@ import requests
 _DIR = Path(__file__).parent
 sys.path.insert(0, str(_DIR))
 
-from config import STOCK_UNIVERSE, STOCK_CLUSTER_MAX_WEIGHT, DEFENSIVE_ROTATION_POOL  # noqa: E402
+from config import (  # noqa: E402
+    STOCK_UNIVERSE,
+    STOCK_CLUSTER_MAX_WEIGHT,
+    DEFENSIVE_ROTATION_POOL,
+    FEISHU_STOCK_WEBHOOKS as FEISHU_WEBHOOKS,
+)
 from data_fetcher import (  # noqa: E402
     get_north_flow,
     get_market_breadth,
     get_index_prices,
     get_etf_main_force_flow,
+    market_prefix as _market_prefix,
 )
 from sentiment_gauge import calc_market_sentiment  # noqa: E402
 from rotation_advisor import calc_rotation_signal, RotationSignal, DIM_EMOJI, STRENGTH_LABEL  # noqa: E402
+from utils import is_trading_day as _utils_is_trading_day  # noqa: E402
+from feishu_pusher import post_card as _post_card  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 常量
 # ─────────────────────────────────────────────────────────────────────────────
-FEISHU_WEBHOOKS = [
-    "https://open.feishu.cn/open-apis/bot/v2/hook/077c6eb2-14ae-4736-8b9b-56d444082da6",
-    "https://open.feishu.cn/open-apis/bot/v2/hook/d7bf66ce-e368-4718-a00e-753fc1f1f5dc",
-]
 STATE_FILE = _DIR / "state" / "regime_state.json"
 LOG_FILE   = _DIR / "logs" / f"stock_timing_{date.today():%Y%m}.log"
 
@@ -67,16 +71,7 @@ _TENCENT_HEADERS = {
     "Referer": "https://finance.qq.com/",
 }
 
-# 公休假日黑名单（补充节假日，格式 YYYY-MM-DD）
-HOLIDAY_BLACKLIST: set[str] = {
-    "2026-01-01", "2026-01-26", "2026-01-27", "2026-01-28",
-    "2026-01-29", "2026-01-30", "2026-02-02",
-    "2026-04-03", "2026-04-06",
-    "2026-05-01", "2026-05-04", "2026-05-05",
-    "2026-06-19",
-    "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06",
-    "2026-10-07", "2026-10-08",
-}
+# 节假日黑名单 — 统一从 config.HOLIDAY_BLACKLIST 读取（避免与 daily_guidance 不一致）
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 日志
@@ -97,19 +92,13 @@ log = logging.getLogger(__name__)
 # 交易日判断
 # ─────────────────────────────────────────────────────────────────────────────
 def is_trading_day(today: str | None = None) -> bool:
-    d = today or date.today().isoformat()
-    if datetime.strptime(d, "%Y-%m-%d").weekday() >= 5:
-        return False
-    return d not in HOLIDAY_BLACKLIST
+    """委托给 utils.is_trading_day（共享 config.HOLIDAY_BLACKLIST）。"""
+    return _utils_is_trading_day(today)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # K 线获取（腾讯财经，与主系统一致，含盘中实时价格）
 # ─────────────────────────────────────────────────────────────────────────────
-def _market_prefix(code: str) -> str:
-    if code.startswith("0") or code.startswith("3"):
-        return "sz"
-    return "sh"
 
 
 def _fetch_tencent_kline(code: str, count: int = 120) -> list | None:
@@ -160,6 +149,26 @@ def fetch_kline(code: str, count: int = 300) -> pd.DataFrame | None:
         return None
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
     return df
+
+
+def fetch_klines_parallel(
+    codes: list[str], count: int = 300, max_workers: int = 10
+) -> dict[str, pd.DataFrame | None]:
+    """并行抓取多只代码的日线，避免主流程串行 ~25 次 HTTP。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    result: dict[str, pd.DataFrame | None] = {}
+    if not codes:
+        return result
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fmap = {pool.submit(fetch_kline, c, count): c for c in codes}
+        for fut in as_completed(fmap):
+            code = fmap[fut]
+            try:
+                result[code] = fut.result()
+            except Exception as e:
+                log.warning(f"K线 {code} 异常: {e}")
+                result[code] = None
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -599,8 +608,10 @@ _RANK_LABEL = {1: "🛡️ 极防御（公用/货币）", 2: "🔵 高股息蓝�
 def fetch_and_score_defensive() -> list[dict]:
     """扫描防御轮动池，返回按防御等级+趋势排序的结果列表。"""
     results: list[dict] = []
+    codes = list(DEFENSIVE_ROTATION_POOL.keys())
+    klines = fetch_klines_parallel(codes, count=300)
     for code, info in DEFENSIVE_ROTATION_POOL.items():
-        df = fetch_kline(code)
+        df = klines.get(code)
         if df is None:
             log.debug(f"防御池 {code} {info['name']} K线获取失败")
             continue
@@ -694,37 +705,61 @@ def _price_snapshot(sym: str, count: int = 65) -> dict | None:
     """
     通用腾讯日K快照。sym 已包含 sh/sz 前缀（如 sh000300 / sz159326）。
     返回 {close, chg_pct, vs_ma5, vs_ma20}，失败返回 None。
+
+    保留单 sym 接口以兼容老调用方；新调用方建议使用 _price_snapshots_batch。
     """
-    url = (
-        f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-        f"?_var=kline_dayqfq&param={sym},day,,,{count},qfq"
-    )
-    for attempt in range(2):
-        try:
-            r = requests.get(url, headers=_TENCENT_HEADERS, timeout=8)
-            r.raise_for_status()
-            raw = r.text.replace("kline_dayqfq=", "")
-            data = json.loads(raw)
-            inner = data.get("data", {}).get(sym, {})
-            klines = inner.get("day") or inner.get("qfqday") or []
-            if len(klines) < 5:
-                return None
-            closes = [float(k[2]) for k in klines]
-            close  = closes[-1]
-            prev   = closes[-2]
-            chg    = round((close / prev - 1) * 100, 2)
-            ma5    = sum(closes[-5:]) / 5
-            ma20   = sum(closes[-20:]) / 20 if len(closes) >= 20 else close
-            return {
-                "close":   close,
-                "chg_pct": chg,
-                "vs_ma5":  "↑" if close > ma5  else "↓",
-                "vs_ma20": "↑" if close > ma20 else "↓",
-            }
-        except Exception:
-            if attempt == 0:
-                time.sleep(1)
-    return None
+    res = _price_snapshots_batch([sym], count=count)
+    return res.get(sym)
+
+
+def _price_snapshots_batch(syms: list[str], count: int = 65) -> dict[str, dict]:
+    """
+    并行批量抓取多个 sym 的日K快照。腾讯日K接口本身一次只能查一个 sym，
+    但用 ThreadPool 并行就能把 9 次串行 (~3s) 压到 ~0.5s。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _one(sym: str) -> tuple[str, dict | None]:
+        url = (
+            f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+            f"?_var=kline_dayqfq&param={sym},day,,,{count},qfq"
+        )
+        for attempt in range(2):
+            try:
+                r = requests.get(url, headers=_TENCENT_HEADERS, timeout=8)
+                r.raise_for_status()
+                raw = r.text.replace("kline_dayqfq=", "")
+                data = json.loads(raw)
+                inner = data.get("data", {}).get(sym, {})
+                klines = inner.get("day") or inner.get("qfqday") or []
+                if len(klines) < 5:
+                    return sym, None
+                closes = [float(k[2]) for k in klines]
+                close = closes[-1]
+                prev = closes[-2]
+                chg = round((close / prev - 1) * 100, 2)
+                ma5 = sum(closes[-5:]) / 5
+                ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else close
+                return sym, {
+                    "close":   close,
+                    "chg_pct": chg,
+                    "vs_ma5":  "↑" if close > ma5 else "↓",
+                    "vs_ma20": "↑" if close > ma20 else "↓",
+                }
+            except Exception:
+                if attempt == 0:
+                    time.sleep(1)
+        return sym, None
+
+    out: dict[str, dict] = {}
+    if not syms:
+        return out
+    with ThreadPoolExecutor(max_workers=min(10, len(syms))) as pool:
+        for fut in as_completed(pool.submit(_one, s) for s in syms):
+            sym, snap = fut.result()
+            if snap is not None:
+                out[sym] = snap
+    return out
 
 
 def fetch_macro_context() -> dict:
@@ -738,10 +773,11 @@ def fetch_macro_context() -> dict:
     """
     ctx: dict = {}
 
-    # ── 1. 大盘指数 ────────────────────────────────────────────────────────
+    # ── 1. 大盘指数（批量并行） ────────────────────────────────────────────
+    idx_snaps = _price_snapshots_batch(list(_INDICES.values()))
     indices: dict[str, dict] = {}
     for name, sym in _INDICES.items():
-        snap = _price_snapshot(sym)
+        snap = idx_snaps.get(sym)
         if snap:
             indices[name] = snap
     ctx["indices"] = indices
@@ -772,10 +808,11 @@ def fetch_macro_context() -> dict:
     except Exception as e:
         log.debug(f"情绪数据: {e}")
 
-    # ── 4. 板块轮动（ETF 当日涨跌幅，腾讯 K 线，无代理依赖）──────────────
+    # ── 4. 板块轮动（批量并行）─────────────────────────────────────────────
+    sec_raw = _price_snapshots_batch(list(_SECTOR_ETFS.values()), count=10)
     sector_snaps: dict[str, dict] = {}
     for name, sym in _SECTOR_ETFS.items():
-        snap = _price_snapshot(sym, count=10)
+        snap = sec_raw.get(sym)
         if snap:
             sector_snaps[name] = snap
     ctx["sector_snaps"] = sector_snaps
@@ -1206,7 +1243,6 @@ def push_feishu(card: dict, dry: bool = False) -> None:
         import pprint
         log.info("[dry-run] 卡片预览（前 3000 字）:")
         pprint.pprint(card, width=120)
-        # 同时用简洁文本打印关键信号
         for el in card["card"]["elements"]:
             if el.get("tag") == "div":
                 txt = el.get("text", {}).get("content", "")
@@ -1214,30 +1250,7 @@ def push_feishu(card: dict, dry: bool = False) -> None:
                     print(txt[:400])
                     print()
         return
-    payload = json.dumps(card, ensure_ascii=False)
-    for url in FEISHU_WEBHOOKS:
-        for attempt in range(3):
-            try:
-                r = requests.post(
-                    url,
-                    headers={"Content-Type": "application/json"},
-                    data=payload,
-                    timeout=10,
-                )
-                res = r.json()
-                if res.get("code") == 0 or res.get("StatusCode") == 0:
-                    log.info(f"飞书推送成功: {url[-8:]}")
-                    break
-                elif res.get("code") == 11232:
-                    wait = (attempt + 1) * 5
-                    log.warning(f"飞书限流({url[-8:]}), {wait}s后重试({attempt+1}/3)...")
-                    time.sleep(wait)
-                else:
-                    log.warning(f"飞书返回({url[-8:]}): {res}")
-                    break
-            except Exception as e:
-                log.error(f"飞书推送异常({url[-8:]}): {e}")
-                break
+    _post_card(card, FEISHU_WEBHOOKS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1271,11 +1284,16 @@ def main(dry: bool = False, force: bool = False) -> None:
     flow_summary = {k: v for k, v in stock_flows.items() if abs(v) >= 0.3}
     log.info(f"个股主力流向（有效值）: {flow_summary}")
 
+    log.info(f"并行抓取 {len(stock_codes)} 只个股 K 线...")
+    all_klines = fetch_klines_parallel(stock_codes, count=300)
+    ok_count = sum(1 for v in all_klines.values() if v is not None)
+    log.info(f"K 线抓取完成：{ok_count}/{len(stock_codes)} 成功")
+
     results:   list[dict] = []
     reversals: list[dict] = []
 
     for code, info in STOCK_UNIVERSE.items():
-        df = fetch_kline(code)          # count=300，约14个月日线
+        df = all_klines.get(code)
         if df is None:
             log.warning(f"{code} {info['name']} K线获取失败")
             continue

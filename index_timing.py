@@ -14,16 +14,15 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 import data_fetcher as df_api
 from data_fetcher import _tencent_kline, _klines_to_df, _market  # 复用底层接口
+from config import FEISHU_INDEX_WEBHOOK as FEISHU_WEBHOOK
+from feishu_pusher import post_card
 
 # ─── 配置 ──────────────────────────────────────────────────────────────────────
-
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2a6bbc1c-91cd-4cb6-963e-7b965999ea89"
 
 INDEX_UNIVERSE: dict[str, dict] = {
     # ── A股宽基 ─────────────────────────────────────────────────
@@ -805,24 +804,7 @@ def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time:
 
 
 def send_to_feishu(card: dict, webhook: str = FEISHU_WEBHOOK) -> bool:
-    try:
-        resp = requests.post(
-            webhook,
-            headers={"Content-Type": "application/json"},
-            json=card,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            result = resp.json()
-            if result.get("code") == 0 or result.get("StatusCode") == 0:
-                logger.info("宽基择时飞书推送成功")
-                return True
-            logger.warning(f"飞书返回异常: {result}")
-        else:
-            logger.warning(f"飞书 HTTP {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logger.error(f"飞书推送失败: {e}")
-    return False
+    return post_card(card, [webhook])
 
 
 # ─── 主流程 ────────────────────────────────────────────────────────────────────
@@ -831,8 +813,8 @@ def run() -> None:
     now      = datetime.today()
     today_str = now.strftime("%Y-%m-%d")
     time_str  = now.strftime("%H:%M")
-    weekday   = now.weekday()
-    if weekday >= 5:
+    from utils import is_trading_day as _it
+    if not _it():
         logger.info("非交易日，跳过")
         return
 

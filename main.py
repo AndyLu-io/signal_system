@@ -59,8 +59,9 @@ def load_positions() -> dict[str, float]:
 
 
 def is_trading_day() -> bool:
-    """简单判断是否为工作日（不含法定节假日，节假日需手动维护）"""
-    return datetime.today().weekday() < 5  # 0=周一 ... 4=周五
+    """委托 utils.is_trading_day（含 config.HOLIDAY_BLACKLIST 节假日判断）。"""
+    from utils import is_trading_day as _it
+    return _it()
 
 
 def save_daily_log(data: dict) -> None:

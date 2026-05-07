@@ -10,49 +10,12 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import TypeVar, Callable
 
 import requests
 
 from config import FEISHU_WEBHOOK, FEISHU_WEBHOOKS, REGIME_UP_CONFIRM, REGIME_DOWN_CONFIRM, DEFENSIVE_ROTATION_POOL, ETF_UNIVERSE, STOCK_UNIVERSE
 from rotation_advisor import calc_rotation_signal, DIM_EMOJI
-
-T = TypeVar("T")
-
-
-def _retry(fn: Callable[[], T], attempts: int = 3, delays: tuple = (2, 5)) -> T:
-    last_exc: Exception = RuntimeError("unknown")
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:
-            last_exc = e
-            if i < len(delays):
-                print(f"  [重试] 第{i+1}次失败({e})，{delays[i]}s后重试...")
-                time.sleep(delays[i])
-    raise last_exc
-
-# ─── 交易日历（简化判断：周一至周五，节假日人工维护排除）─────────────────────
-HOLIDAY_BLACKLIST = {
-    # 2026年主要节假日（需每年更新）
-    "2026-01-01", "2026-01-02",
-    "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
-    "2026-02-23", "2026-02-24",
-    "2026-04-03", "2026-04-04", "2026-04-05", "2026-04-06",
-    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
-    "2026-06-19", "2026-06-20", "2026-06-21",
-    "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
-    "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08",
-}
-
-
-def is_trading_day() -> bool:
-    today = date.today()
-    if today.weekday() >= 5:
-        return False
-    if today.isoformat() in HOLIDAY_BLACKLIST:
-        return False
-    return True
+from utils import retry as _retry, is_trading_day
 
 
 # ─── 外部宏观快速抓取 ─────────────────────────────────────────────────────────
@@ -361,6 +324,10 @@ def fetch_position_alerts(etf_prices: dict) -> list:
     """
     检查 positions.json 中的持仓，返回止损/减仓预警列表。
     cost==0 的条目视为空仓，跳过。
+
+    持仓 K 线优先取自 etf_prices（盘中已抓过 ETF）；
+    出现在持仓但不在 etf_prices 的代码（多为个股）会即时补抓，
+    避免个股止损被静默丢弃。
     """
     state_path = Path(__file__).parent / "state" / "positions.json"
     try:
@@ -371,6 +338,18 @@ def fetch_position_alerts(etf_prices: dict) -> list:
 
     all_names = {k: v.get("name", k) for k, v in {**ETF_UNIVERSE, **STOCK_UNIVERSE}.items()}
     alerts = []
+
+    # 持仓中不在 etf_prices 的代码 → 临时补抓（多为个股）
+    missing = [c for c in positions if etf_prices.get(c) is None]
+    if missing:
+        try:
+            import data_fetcher as df_api
+            extra = df_api.get_etf_prices(missing, days=30)
+            for c, df in extra.items():
+                if df is not None:
+                    etf_prices[c] = df
+        except Exception as e:
+            print(f"  [警告] 补抓持仓K线失败: {e}")
 
     for code, cost in positions.items():
         df = etf_prices.get(code)
@@ -465,52 +444,12 @@ def _format_realtime_sections(reading, position_alerts: list) -> list:
         if reading.market_panic:
             panic_prefix = f"😱 **{reading.market_note}** — 恐慌低吸窗口！\n\n"
 
-        lines = []
-        for s in strong:
-            # 从 MA20 偏离推算关键价位
-            ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
-            entry_lo = round(ma20 * 0.992, 3)
-            entry_hi = round(ma20 * 1.008, 3)
-            stop_p   = round(ma20 * 0.91,  3)
-            target   = round(ma20 * 1.08,  3)
+        lines = [_format_buy_signal_block(s) for s in strong]
+        weak_lines = [_format_buy_signal_block(s, force_icon="🟡") for s in weak]
 
-            icon = "🟢" if s.stars == 3 else "🔵"
-            flow_str = ""
-            if abs(s.main_force_flow) >= 0.1:
-                arrow = "↑" if s.main_force_flow > 0 else "↓"
-                flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
-
-            trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
-            lines.append(
-                f"{icon} **{s.name}**（{s.code}）\n"
-                f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
-                f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
-                f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
-                + (f"\n    *{trigger_str}*" if trigger_str else "")
-            )
-
-        # 一般机会（★）也完整展示，只是换图标和标注"轻度"
-        weak_lines = []
-        for s in weak:
-            ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
-            entry_lo = round(ma20 * 0.992, 3)
-            entry_hi = round(ma20 * 1.008, 3)
-            stop_p   = round(ma20 * 0.91,  3)
-            target   = round(ma20 * 1.08,  3)
-            flow_str = ""
-            if abs(s.main_force_flow) >= 0.1:
-                arrow = "↑" if s.main_force_flow > 0 else "↓"
-                flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
-            trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
-            weak_lines.append(
-                f"🟡 **{s.name}**（{s.code}）\n"
-                f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
-                f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
-                f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
-                + (f"\n    *{trigger_str}*" if trigger_str else "")
-            )
-
-        weak_section = ("\n\n**⬇️ 一般机会（轻度超卖，可小仓观察）**\n\n" + "\n\n".join(weak_lines)) if weak_lines else ""
+        weak_section = (
+            "\n\n**⬇️ 一般机会（轻度超卖，可小仓观察）**\n\n" + "\n\n".join(weak_lines)
+        ) if weak_lines else ""
         header = f"**⚡ 实时买入机会**\n\n{panic_prefix}"
         sections += [md(header + "\n\n".join(lines) + weak_section), {"tag": "hr"}]
 
@@ -519,53 +458,57 @@ def _format_realtime_sections(reading, position_alerts: list) -> list:
         panic_lines = [f"**😱 大盘恐慌：{reading.market_note}**\n等待量能止稳后的低吸机会"]
         if weak:
             panic_lines.append("**⬇️ 一般机会（轻度超卖，可小仓关注）**")
-            for s in weak:
-                ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
-                entry_lo = round(ma20 * 0.992, 3)
-                entry_hi = round(ma20 * 1.008, 3)
-                stop_p   = round(ma20 * 0.91,  3)
-                target   = round(ma20 * 1.08,  3)
-                flow_str = ""
-                if abs(s.main_force_flow) >= 0.1:
-                    arrow = "↑" if s.main_force_flow > 0 else "↓"
-                    flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
-                trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
-                panic_lines.append(
-                    f"🟡 **{s.name}**（{s.code}）\n"
-                    f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
-                    f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
-                    f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
-                    + (f"\n    *{trigger_str}*" if trigger_str else "")
-                )
+            panic_lines.extend(_format_buy_signal_block(s, force_icon="🟡") for s in weak)
         sections += [md("\n\n".join(panic_lines)), {"tag": "hr"}]
 
     else:
         if weak:
             # 无强信号但有 weak → 也完整展示
             weak_only_lines = ["**⚪ 暂无强买入机会**\n\n**⬇️ 一般机会（轻度超卖，可小仓观察）**"]
-            for s in weak:
-                ma20 = s.current_price / (1 + s.ma20_dev_pct / 100) if s.ma20_dev_pct != -100 else s.current_price
-                entry_lo = round(ma20 * 0.992, 3)
-                entry_hi = round(ma20 * 1.008, 3)
-                stop_p   = round(ma20 * 0.91,  3)
-                target   = round(ma20 * 1.08,  3)
-                flow_str = ""
-                if abs(s.main_force_flow) >= 0.1:
-                    arrow = "↑" if s.main_force_flow > 0 else "↓"
-                    flow_str = f" 主力{arrow}{abs(s.main_force_flow):.2f}亿"
-                trigger_str = " | ".join(s.triggers[:2]) if s.triggers else ""
-                weak_only_lines.append(
-                    f"🟡 **{s.name}**（{s.code}）\n"
-                    f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
-                    f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
-                    f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
-                    + (f"\n    *{trigger_str}*" if trigger_str else "")
-                )
+            weak_only_lines.extend(_format_buy_signal_block(s, force_icon="🟡") for s in weak)
             sections += [md("\n\n".join(weak_only_lines)), {"tag": "hr"}]
         else:
             sections += [md("**⚪ 暂无买入机会**\n股池品种未到技术低点，继续等待回调"), {"tag": "hr"}]
 
     return sections
+
+
+def _format_buy_signal_block(s: object, *, force_icon: str | None = None) -> str:
+    """
+    单个买点信号的完整展示块（飞书 lark_md）。
+    `s` 须有 main_force_flow / current_price / ma20_dev_pct / change_pct /
+    rsi6 / triggers / stars / name / code 等字段，由 tail_market_scanner.TailSignal 提供。
+    """
+    if force_icon is None:
+        icon = "🟢" if getattr(s, "stars", 0) >= 3 else "🔵"
+    else:
+        icon = force_icon
+
+    ma20 = (
+        s.current_price / (1 + s.ma20_dev_pct / 100)
+        if s.ma20_dev_pct != -100 else s.current_price
+    )
+    entry_lo = round(ma20 * 0.992, 3)
+    entry_hi = round(ma20 * 1.008, 3)
+    stop_p   = round(ma20 * 0.91,  3)
+    target   = round(ma20 * 1.08,  3)
+
+    flow_str = ""
+    flow = getattr(s, "main_force_flow", 0.0)
+    if abs(flow) >= 0.1:
+        arrow = "↑" if flow > 0 else "↓"
+        flow_str = f" 主力{arrow}{abs(flow):.2f}亿"
+
+    triggers = getattr(s, "triggers", []) or []
+    trigger_str = " | ".join(triggers[:2]) if triggers else ""
+
+    return (
+        f"{icon} **{s.name}**（{s.code}）\n"
+        f"    现价 {s.current_price:.3f} 今日{s.change_pct:+.1f}%"
+        f" RSI={s.rsi6:.0f} MA20偏{s.ma20_dev_pct:+.1f}%{flow_str}\n"
+        f"    📌 买入区 **{entry_lo}–{entry_hi}** | 止损 **{stop_p}** | 目标 {target}"
+        + (f"\n    *{trigger_str}*" if trigger_str else "")
+    )
 
 
 # ─── 主力资金意图分析 ────────────────────────────────────────────────────────────
@@ -1327,19 +1270,19 @@ def send_feishu(
         },
     }
 
-    primary_result = None
-    for i, url in enumerate(FEISHU_WEBHOOKS):
-        resp = requests.post(url, json=data, timeout=10)
-        result = resp.json()
-        if i == 0:
-            primary_result = result
-            if result.get("code") != 0:
-                raise ValueError(f"code={result.get('code')} msg={result.get('msg')}")
-        else:
-            if result.get("code") != 0:
-                import logging as _lg
-                _lg.getLogger(__name__).warning(f"副 webhook 推送失败({url[-8:]}): {result}")
-    return primary_result
+    from feishu_pusher import post_card as _post
+
+    if not FEISHU_WEBHOOKS:
+        raise ValueError("FEISHU_WEBHOOKS 未配置")
+
+    # 主 webhook 失败要 raise（外层 _retry 会重试）；副 webhook 失败仅 warn
+    primary_url = FEISHU_WEBHOOKS[0]
+    primary_ok = _post(data, [primary_url])
+    if not primary_ok:
+        raise ValueError(f"主 webhook 推送失败: {primary_url[-8:]}")
+    if len(FEISHU_WEBHOOKS) > 1:
+        _post(data, FEISHU_WEBHOOKS[1:])
+    return {"code": 0}
 
 
 # ─── 保存MD文件 ───────────────────────────────────────────────────────────────

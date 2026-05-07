@@ -4,9 +4,7 @@
 """
 
 from __future__ import annotations
-import json
 import logging
-import requests
 from datetime import datetime
 from typing import Optional as _Optional
 
@@ -14,6 +12,7 @@ from config import (FEISHU_WEBHOOK, FEISHU_WEBHOOKS, SIGNAL_BUY_STRONG, SIGNAL_B
                     SIGNAL_HOLD, SIGNAL_REDUCE, SIGNAL_SELL_STOP, SIGNAL_AVOID,
                     DEFENSIVE_ROTATION_POOL)
 from rotation_advisor import format_rotation_card_md as _fmt_rotation
+from feishu_pusher import post_card, post_text
 import etf_reversal
 
 logger = logging.getLogger(__name__)
@@ -254,36 +253,10 @@ def send_signal(
                               sentiment, rotation, data_health, reversals)
 
     targets = FEISHU_WEBHOOKS if webhook == FEISHU_WEBHOOK else [webhook]
-    success = False
-    for url in targets:
-        try:
-            resp = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(card, ensure_ascii=False),
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-                if result.get("code") == 0 or result.get("StatusCode") == 0:
-                    logger.info(f"飞书推送成功: {url[-8:]}")
-                    success = True
-                else:
-                    logger.warning(f"飞书返回异常({url[-8:]}): {result}")
-            else:
-                logger.warning(f"飞书 HTTP {resp.status_code}({url[-8:]}): {resp.text}")
-        except Exception as e:
-            logger.error(f"飞书推送失败({url[-8:]}): {e}")
-    return success
+    return post_card(card, targets)
 
 
 def send_error_alert(message: str, webhook: str = FEISHU_WEBHOOK) -> None:
     """系统异常时发送简单文本告警"""
-    payload = {
-        "msg_type": "text",
-        "content": {"text": f"⚠️ 信号系统异常\n{message}\n{datetime.now().strftime('%Y-%m-%d %H:%M')}"},
-    }
-    try:
-        requests.post(webhook, json=payload, timeout=5)
-    except Exception:
-        pass
+    text = f"⚠️ 信号系统异常\n{message}\n{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    post_text(text, [webhook])

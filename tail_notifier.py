@@ -4,15 +4,14 @@
 """
 
 from __future__ import annotations
-import json
 import logging
-import requests
 from datetime import datetime
 from typing import Optional
 
 from config import FEISHU_WEBHOOK, FEISHU_TAIL_WEBHOOKS, DEFENSIVE_ROTATION_POOL
 from tail_market_scanner import TailMarketReading, STAR_MAP
 from rotation_advisor import format_rotation_card_md as _fmt_rotation
+from feishu_pusher import post_card
 
 logger = logging.getLogger(__name__)
 
@@ -169,16 +168,4 @@ def send_tail_signal(
     if run_date is None:
         run_date = datetime.today().strftime("%Y-%m-%d")
     card = build_tail_card(reading, run_date, rotation, scan_mode=scan_mode)
-    payload = json.dumps(card, ensure_ascii=False)
-    headers = {"Content-Type": "application/json"}
-    ok = False
-    for url in FEISHU_TAIL_WEBHOOKS:
-        try:
-            resp = requests.post(url, headers=headers, data=payload, timeout=10)
-            if resp.status_code == 200 and resp.json().get("code", -1) == 0:
-                ok = True
-            else:
-                logger.warning(f"飞书返回({url[-8:]}): {resp.text[:200]}")
-        except Exception as e:
-            logger.error(f"尾盘推送失败({url[-8:]}): {e}")
-    return ok
+    return post_card(card, FEISHU_TAIL_WEBHOOKS)

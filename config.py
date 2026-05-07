@@ -3,16 +3,66 @@ V4.0 信号系统配置
 静态参数：ETF池、政策评分、因子权重、机制阈值
 """
 
+import os
+
 # ─── 飞书 Webhook ────────────────────────────────────────────────────────────
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/9dafed62-6b03-42d8-a802-32906592db68"
-FEISHU_WEBHOOKS = [
-    FEISHU_WEBHOOK,
-    "https://open.feishu.cn/open-apis/bot/v2/hook/a3523361-87bf-470c-821d-1c30cd2f6588",
-]
+# 优先从环境变量读取（推荐 .env 或 launchd plist 注入）；
+# 未设置时退回历史硬编码值，保证 launchd 现网无需立刻改配置。
+def _env_webhook(key: str, default: str) -> str:
+    return os.environ.get(key, default)
+
+
+def _env_webhooks(key: str, defaults: list[str]) -> list[str]:
+    raw = os.environ.get(key)
+    if raw:
+        return [u.strip() for u in raw.split(",") if u.strip()]
+    return defaults
+
+
+FEISHU_WEBHOOK = _env_webhook(
+    "FEISHU_WEBHOOK",
+    "https://open.feishu.cn/open-apis/bot/v2/hook/9dafed62-6b03-42d8-a802-32906592db68",
+)
+FEISHU_WEBHOOKS = _env_webhooks(
+    "FEISHU_WEBHOOKS",
+    [
+        FEISHU_WEBHOOK,
+        "https://open.feishu.cn/open-apis/bot/v2/hook/a3523361-87bf-470c-821d-1c30cd2f6588",
+    ],
+)
 # ETF尾盘/早盘/竞价择时专用推送列表（仅发送到专属频道）
-FEISHU_TAIL_WEBHOOKS = [
-    "https://open.feishu.cn/open-apis/bot/v2/hook/d74bc3bd-2cc6-4126-ade2-4625dd7d4854",
-]
+FEISHU_TAIL_WEBHOOKS = _env_webhooks(
+    "FEISHU_TAIL_WEBHOOKS",
+    ["https://open.feishu.cn/open-apis/bot/v2/hook/d74bc3bd-2cc6-4126-ade2-4625dd7d4854"],
+)
+# 个股盘中择时（stock_timing.py）专用频道
+FEISHU_STOCK_WEBHOOKS = _env_webhooks(
+    "FEISHU_STOCK_WEBHOOKS",
+    [
+        "https://open.feishu.cn/open-apis/bot/v2/hook/077c6eb2-14ae-4736-8b9b-56d444082da6",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/d7bf66ce-e368-4718-a00e-753fc1f1f5dc",
+    ],
+)
+# 宽基/海外指数择时（index_timing.py）专用频道
+FEISHU_INDEX_WEBHOOK = _env_webhook(
+    "FEISHU_INDEX_WEBHOOK",
+    "https://open.feishu.cn/open-apis/bot/v2/hook/2a6bbc1c-91cd-4cb6-963e-7b965999ea89",
+)
+
+
+# ─── 节假日黑名单（统一来源） ─────────────────────────────────────────────────
+# 所有 is_trading_day() 调用都从这里读，避免 daily_guidance / stock_timing 等
+# 各处分别维护导致不一致。每年元旦前需更新。
+HOLIDAY_BLACKLIST: set[str] = {
+    "2026-01-01", "2026-01-02",
+    "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+    "2026-02-23", "2026-02-24",
+    "2026-04-03", "2026-04-04", "2026-04-05", "2026-04-06",
+    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
+    "2026-06-19", "2026-06-20", "2026-06-21",
+    "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
+    "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08",
+}
 
 # ─── 账户基础参数 ─────────────────────────────────────────────────────────────
 ACCOUNT_NET_VALUE = 300_000  # 账户净值（元），每月手动更新

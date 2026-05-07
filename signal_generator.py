@@ -44,6 +44,23 @@ def _vol_factor(code: str) -> float:
     return VOLATILITY_FACTOR["medium"]
 
 
+# 桶 → 风险预算份额（占当日总风险预算的比例）
+_BUCKET_RISK_SHARE = {"core_alpha": 0.65, "tactical": 0.25, "defensive": 0.10}
+
+# 单桶内"同时持仓"的目标并发数 —— 把单品风险预算摊到 N 只品种上。
+# 原写死 3，但 core_alpha 桶现有 13 只 ETF，3 已经不再代表实际并发数；
+# 实际由 CLUSTER_MAX_WEIGHT + tier 过滤决定，经验值 4-6。
+# 维持 4 与历史推送结果接近，仅修正"3 永远不变"这件事的语义不可调。
+_CONCURRENT_PER_BUCKET = {"core_alpha": 4, "tactical": 3, "defensive": 2}
+
+
+def _concurrent_size(bucket: str) -> int:
+    """单桶并发持仓数；同时不超过该桶 universe 数量。"""
+    universe_n = sum(1 for v in ETF_UNIVERSE.values() if v.get("bucket") == bucket)
+    target = _CONCURRENT_PER_BUCKET.get(bucket, 3)
+    return max(min(target, universe_n or target), 1)
+
+
 def calc_risk_budget_weight(code: str, regime: str, tier: str) -> float:
     """
     资金仓位 = 桶内风险预算份额 / (止损幅度 × 波动系数)
@@ -58,11 +75,11 @@ def calc_risk_budget_weight(code: str, regime: str, tier: str) -> float:
     daily_loss_budget = ACCOUNT_NET_VALUE * params["daily_loss_rate"]
 
     # 按桶分配风险预算
-    bucket_risk_share = 0.65 if bucket == "core_alpha" else (0.25 if bucket == "tactical" else 0.10)
+    bucket_risk_share = _BUCKET_RISK_SHARE.get(bucket, 0.10)
     bucket_budget = daily_loss_budget * bucket_risk_share
 
-    # 单品风险预算份额（假设该桶平均3个品种）
-    single_budget = bucket_budget / 3
+    # 单品风险预算份额：按该桶并发持仓目标摊（参数化，避免硬编码 3）
+    single_budget = bucket_budget / _concurrent_size(bucket)
 
     # 止损幅度
     if bucket == "core_alpha":
