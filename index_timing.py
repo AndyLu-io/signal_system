@@ -223,11 +223,19 @@ def _score_trend(closes: np.ndarray) -> tuple[float, str, dict]:
     else:
         ma20_slope = 0.0
 
-    score = float(min(max(base + slope_bonus, 5), 98))
+    dev_from_ma20 = float((current - ma20) / ma20 * 100)
+    if   dev_from_ma20 >= 15: dev_penalty = -22
+    elif dev_from_ma20 >= 10: dev_penalty = -15
+    elif dev_from_ma20 >= 7:  dev_penalty = -8
+    elif dev_from_ma20 >= 4:  dev_penalty = -4
+    else:                      dev_penalty = 0
+
+    score = float(min(max(base + slope_bonus + dev_penalty, 5), 98))
     details = {
         "ma5": round(ma5, 2), "ma20": round(ma20, 2),
         "ma60": round(ma60, 2) if ma60 else None,
         "ma20_slope": round(ma20_slope, 3) if ma20_5d_ago else 0.0,
+        "dev_from_ma20": round(dev_from_ma20, 1),
         "label": label,
     }
     return round(score, 1), label, details
@@ -411,7 +419,7 @@ class IndexTiming:
         d = self.details
         ret5 = f"{d.get('ret5', 0):+.1f}%"
         rsi  = d.get("rsi", 0)
-        ma_label = d.get("trend_label", "")
+        ma_label = self.trend_label
         return (
             f"{info['emoji']} **{self.name}**({self.code}) "
             f"{info['label']} {self.composite:.0f}分 "
@@ -465,6 +473,12 @@ def calc_index_timing(
     composite = round(
         0.35 * t_score + 0.25 * m_score + 0.15 * v_score + 0.25 * macro_score, 1
     )
+    # 宏观情绪过热门控：macro≥70(HOT)时不发STRONG_BUY，最高为BUY（上限71）
+    if macro_score >= 70:
+        composite = min(composite, 71.0)
+    # RSI极度过热门控（主要保护海外ETF无宏观门控时）
+    if m_details.get("rsi", 50) >= 80:
+        composite = min(composite, 68.0)
     signal = _get_signal(composite)
 
     combined_details = {**t_details, **m_details}
