@@ -153,6 +153,16 @@ def _score_etf_tail(
     cautions = []
     score = 0.0
 
+    # 高开低走预判（在所有评分之前，防止出货形态被误判为买点）
+    today_high = quote.get("high", current)
+    if today_high > 0 and current > 0:
+        intraday_fall = (today_high - current) / current * 100
+        if intraday_fall >= 3.0:
+            cautions.append(f"高开冲高回落{intraday_fall:.1f}%（出货形态风险）")
+            score -= 10
+        elif intraday_fall >= 1.5:
+            cautions.append(f"今日冲高回落{intraday_fall:.1f}%，形态偏弱")
+
     # ── S1: 今日跌幅（恐惧程度）────────────────────────────────────────────
     if change_pct <= -5:
         score += 20; triggers.append(f"今日暴跌{change_pct:.1f}%（极度恐慌）")

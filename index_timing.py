@@ -223,6 +223,17 @@ def _score_trend(closes: np.ndarray) -> tuple[float, str, dict]:
     else:
         ma20_slope = 0.0
 
+    # MA60斜率修正（中期趋势方向确认）
+    ma60_slope = 0.0
+    ma60_slope_bonus = 0
+    if ma60 is not None and len(closes) >= 65:
+        ma60_5d_ago = closes[-65:-5].mean()
+        ma60_slope = (float(ma60) - float(ma60_5d_ago)) / float(ma60_5d_ago) * 100
+        if   ma60_slope >= 0.3:  ma60_slope_bonus = 5
+        elif ma60_slope >= 0.1:  ma60_slope_bonus = 2
+        elif ma60_slope <= -0.5: ma60_slope_bonus = -6
+        elif ma60_slope <= -0.2: ma60_slope_bonus = -3
+
     dev_from_ma20 = float((current - ma20) / ma20 * 100)
     if   dev_from_ma20 >= 15: dev_penalty = -22
     elif dev_from_ma20 >= 10: dev_penalty = -15
@@ -230,11 +241,12 @@ def _score_trend(closes: np.ndarray) -> tuple[float, str, dict]:
     elif dev_from_ma20 >= 4:  dev_penalty = -4
     else:                      dev_penalty = 0
 
-    score = float(min(max(base + slope_bonus + dev_penalty, 5), 98))
+    score = float(min(max(base + slope_bonus + ma60_slope_bonus + dev_penalty, 5), 98))
     details = {
         "ma5": round(ma5, 2), "ma20": round(ma20, 2),
         "ma60": round(ma60, 2) if ma60 else None,
         "ma20_slope": round(ma20_slope, 3) if ma20_5d_ago else 0.0,
+        "ma60_slope": round(ma60_slope, 3),
         "dev_from_ma20": round(dev_from_ma20, 1),
         "label": label,
     }
@@ -838,7 +850,7 @@ def run() -> None:
     logger.info("获取ETF K线数据...")
     etf_dfs = {}
     for code, info in INDEX_UNIVERSE.items():
-        etf_dfs[code] = _fetch_etf_df(code, days=65)
+        etf_dfs[code] = _fetch_etf_df(code, days=120)
         status = "OK" if etf_dfs[code] is not None else "FAIL"
         logger.info(f"  {info['name']}({code}): {status}")
 

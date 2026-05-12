@@ -53,7 +53,7 @@ def _detect_scan_mode() -> tuple[str, float]:
         return "open", 0.05
     if h == 9 and m <= 50:
         return "early", 0.10
-    return "tail", 0.80
+    return "tail", 0.88
 
 
 _MODE_LABEL = {"open": "竞价后买点", "early": "早盘黄金买点", "tail": "尾盘择时"}
@@ -71,7 +71,7 @@ def run() -> None:
     # ── 1. 获取ETF日K线 + 三维评判所需数据 ─────────────────────────────────
     logger.info("获取ETF历史K线及市场数据...")
     etf_codes = list(ETF_UNIVERSE.keys())
-    etf_prices    = df_api.get_etf_prices(etf_codes, days=65)  # 多取用于MA60
+    etf_prices    = df_api.get_etf_prices(etf_codes, days=120)  # MA60斜率需要65+根
     csi300        = df_api.get_index_prices(INDEX_CSI300, days=40)
     breadth       = df_api.get_market_breadth()
     north_flow    = df_api.get_north_flow(days=5)

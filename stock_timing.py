@@ -311,7 +311,9 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
         if ind["macd_bar"] > ind["macd_bar_p"]:
             score += 1; reasons.append("红柱扩张")
     else:
-        if ind["macd_bar"] < ind["macd_bar_p"]:
+        if ind.get("pre_golden_cross"):
+            score += 1; reasons.append("MACD即将金叉🔔")
+        elif ind["macd_bar"] < ind["macd_bar_p"]:
             score -= 1; reasons.append("绿柱扩张")
 
     # RSI(14)
@@ -329,8 +331,8 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
     vr = ind["vol_ratio"]
     if vr >= 1.5 and close >= ma5:
         score += 1; reasons.append(f"放量{vr:.1f}x")
-    elif vr < 0.6:
-        score -= 1; reasons.append(f"缩量{vr:.1f}x")
+    elif vr < 0.6 and close < ma5:
+        score -= 1; reasons.append(f"缩量弱势{vr:.1f}x")
 
     # 三维信号强度加成
     sig3d = info.get("signal_3d", "★☆☆")
@@ -362,6 +364,13 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
         score += 1; reasons.append(f"主力净流入{flow:.1f}亿")
     elif flow < -0.5:
         score -= 1; reasons.append(f"主力净流出{abs(flow):.1f}亿")
+
+    # 偏离MA20（追高风险，阈值比ETF系统宽松以适应个股波动）
+    dev_ma20 = (close - ma20) / ma20 * 100
+    if dev_ma20 >= 20:
+        score -= 2; reasons.append(f"严重偏离MA20+{dev_ma20:.0f}%")
+    elif dev_ma20 >= 12:
+        score -= 1; reasons.append(f"偏离MA20+{dev_ma20:.0f}%")
 
     return score, reasons
 
@@ -1104,6 +1113,54 @@ def _reversal_line(r: dict) -> str:
     )
 
 
+def _is_coiling(r: dict) -> bool:
+    """蓄势待发：中期结构健康（MA60向上、价格站稳MA20、RSI未过热），但缺短期确认信号。"""
+    ind = r.get("ind", {})
+    return (
+        r["signal"] == "HOLD"
+        and r["score"] >= 3
+        and ind.get("ma60_slope_5d", 0.0) > 0.3
+        and ind.get("close", 0) > ind.get("ma20", 0)
+        and ind.get("rsi", 50) < 72
+    )
+
+
+def _coiling_trigger_hint(ind: dict) -> str:
+    """自动分析缺哪个短期信号才能触发 BUY_STRONG。"""
+    hints = []
+    close, ma5, ma20, ma60 = ind["close"], ind["ma5"], ind["ma20"], ind["ma60"]
+    cross = ind.get("cross", "")
+    if cross != "golden":
+        if ind.get("dif", 0) < ind.get("dea", 0):
+            hints.append("MACD金叉")
+        elif not (ind.get("macd_bar", 0) > ind.get("macd_bar_p", 0)):
+            hints.append("红柱扩张")
+    if not (close > ma5 > ma20 > ma60):
+        hints.append("突破MA5(多头排列)")
+    if ind.get("vol_ratio", 1.0) < 1.5:
+        hints.append("放量>1.5x")
+    return "⏳ 等待触发：" + " | ".join(hints[:3]) if hints else "⏳ 触发条件接近满足"
+
+
+def _coiling_line(r: dict) -> str:
+    ind        = r["ind"]
+    info       = r["info"]
+    close      = ind["close"]
+    ma60_slope = ind.get("ma60_slope_5d", 0.0)
+    flow       = ind.get("main_force_flow", 0.0)
+    text       = "、".join(r["reasons"]) if r["reasons"] else "技术面改善中"
+    flow_str   = (f"  主力{'↑' if flow > 0 else '↓'}{abs(flow):.1f}亿" if abs(flow) >= 0.3 else "")
+    trigger    = _coiling_trigger_hint(ind)
+    return (
+        f"🎯 **{r['name']}**（{r['code']}）"
+        f"｜{info.get('signal_3d','—')} {info.get('theme','')}  评分{_score100(r['score'])}/100\n"
+        f"  价格 **{close:.2f}**  MA60↑+{ma60_slope:.1f}%/5日"
+        f"  {_rsi_tag(ind['rsi'])}{flow_str}\n"
+        f"  📋 {text}\n"
+        f"  {trigger}"
+    )
+
+
 def build_card(results: list[dict], regime: str, ts: str,
                ctx: dict | None = None, reversals: list[dict] | None = None) -> dict:
     color       = REGIME_COLOR.get(regime, "blue")
@@ -1131,7 +1188,9 @@ def build_card(results: list[dict], regime: str, ts: str,
     reduces    = [r for r in results if r["signal"] == "REDUCE"]
     buys_s     = [r for r in results if r["signal"] == "BUY_STRONG"]
     buys_w     = [r for r in results if r["signal"] == "BUY_WATCH"]
-    near_buys  = [r for r in results if r["signal"] == "HOLD" and r["score"] >= 2]
+    _near_all  = [r for r in results if r["signal"] == "HOLD" and r["score"] >= 2]
+    coiling    = [r for r in _near_all if _is_coiling(r)]
+    near_buys  = [r for r in _near_all if not _is_coiling(r)]
     holds      = [r for r in results if r["signal"] == "HOLD" and 0 <= r["score"] < 2]
     weak_holds = [r for r in results if r["signal"] == "HOLD" and r["score"] < 0]
 
@@ -1149,28 +1208,39 @@ def build_card(results: list[dict], regime: str, ts: str,
             {"tag": "hr"},
         ]
 
-    def _name_sec(title: str, items: list[dict]) -> list[dict]:
+    def _compact_sec(title: str, items: list[dict]) -> list[dict]:
+        """技术中性/弱势持观专用：每股一行，显示核心指标，比纯名称列表清晰。"""
         if not items:
             return []
-        names = "　".join(
-            f"{r['name']}({r['code']}) {_score100(r['score'])}/100"
-            for r in items
-        )
+        lines = []
+        for r in items:
+            ind      = r["ind"]
+            s100     = _score100(r["score"])
+            rsi      = ind.get("rsi", 50)
+            chg3     = ind.get("chg3", 0.0)
+            ma20_tag = "↑MA20" if ind.get("close", 0) > ind.get("ma20", 0) else "↓MA20"
+            lines.append(
+                f"  {r['name']}({r['code']})  **{s100}/100**"
+                f"  RSI={rsi:.0f}  {ma20_tag}  3日{chg3:+.1f}%"
+            )
+        body = "\n".join(lines)
         return [
-            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{title}**\n{names}"}},
+            {"tag": "div", "text": {"tag": "lark_md",
+                                     "content": f"**{title}**（{len(items)}只）\n{body}"}},
+            {"tag": "hr"},
+        ]
+
+    def _coiling_sec(items: list[dict]) -> list[dict]:
+        if not items:
+            return []
+        body = "\n\n".join(_coiling_line(r) for r in items)
+        return [
+            {"tag": "div", "text": {"tag": "lark_md",
+                                     "content": f"**🎯 ━━ 蓄势待发 · 买点前夕 ━━**（{len(items)}只）\n{body}"}},
             {"tag": "hr"},
         ]
 
     elements: list[dict] = []
-
-    # ── 强买入信号 —— 永远置顶 ───────────────────────────────────────────
-    if buys_s:
-        buy_title = (
-            "🚀 ━━ 强买入信号（⚠️情绪过热，等回落确认后入场）━━"
-            if timing_blocked else
-            "🚀 ━━ 强买入信号 ━━"
-        )
-        elements += _sec(buy_title, buys_s)
 
     # ── 宏观摘要 ──────────────────────────────────────────────────────────
     if ctx:
@@ -1186,6 +1256,15 @@ def build_card(results: list[dict], regime: str, ts: str,
         {"tag": "hr"},
     ]
 
+    # ── 强买入信号 —— 机制行下方 ──────────────────────────────────────────
+    if buys_s:
+        buy_title = (
+            "🚀 ━━ 强买入信号（⚠️情绪过热，等回落确认后入场）━━"
+            if timing_blocked else
+            "🚀 ━━ 强买入信号 ━━"
+        )
+        elements += _sec(buy_title, buys_s)
+
     # ── 攻守切换区块（情绪过热时插入）─────────────────────────────────────
     if timing_blocked:
         log.info("情绪过热，扫描防御轮动池...")
@@ -1196,14 +1275,15 @@ def build_card(results: list[dict], regime: str, ts: str,
             {"tag": "hr"},
         ]
 
+    elements += _coiling_sec(coiling)
     elements += _sec("🔵 ━━ 观察建仓 · 今日机会 ━━", buys_w)
     elements += _sec("🟡 接近买入线（可小仓关注）", near_buys)
     elements += _sec("🔴 止损（立即执行）", sell_stops)
     elements += _sec("📉 减仓 / 回避", reduces)
-    elements += _name_sec("⚪ 技术中性（持仓不动）", holds)
-    elements += _name_sec("🟠 弱势持观（偏弱未破位）", weak_holds)
+    elements += _compact_sec("⚪ 技术中性（持仓不动）", holds)
+    elements += _compact_sec("🟠 弱势持观（偏弱未破位）", weak_holds)
 
-    if not (sell_stops or reduces or buys_s or buys_w or near_buys or holds or weak_holds):
+    if not (sell_stops or reduces or buys_s or buys_w or coiling or near_buys or holds or weak_holds):
         elements.append({"tag": "div", "text": {"tag": "lark_md",
                                                   "content": "暂无有效信号"}})
 
