@@ -293,13 +293,13 @@ STOCK_UNIVERSE = {
         "name": "中际旭创",
         "theme": "光模块",
         "pool": "core",      "cluster": "optics",
-        "f_policy": 78,      "f_earnings": 72,
+        "f_policy": 78,      "f_earnings": 85,
         "signal_3d": "★★★",
-        "fund_delta": 1657,  "fund_pct": 816.3,
-        "nb_delta": 1.414,   "q1_yoy": 1657,
+        "fund_delta": -721,  "fund_pct": 816.3,
+        "nb_delta": 1.414,   "q1_yoy": 1860,
         "etf_overlap": ["515880", "159909", "159915"],
         "discovered": "2026Q1",
-        "note": "光模块龙头；公募+1185只+北向+1.41pp，Q1同比续增",
+        "note": "光模块龙头；Q1净利+262%营收+192%ROE=17.5%，公募季节性获利了结-721家，非基本面恶化",
     },
     "300502": {
         "name": "新易盛",
@@ -857,13 +857,13 @@ STOCK_UNIVERSE = {
         "name": "长飞光纤",
         "theme": "光纤光缆",
         "pool": "core",      "cluster": "optics",
-        "f_policy": 85,      "f_earnings": 75,
+        "f_policy": 85,      "f_earnings": 80,
         "signal_3d": "★★★",
-        "fund_delta": 131,   "fund_pct": 1637.5,
+        "fund_delta": -76,   "fund_pct": 1637.5,
         "nb_delta": 0.0,     "q1_yoy": 139,
         "etf_overlap": ["159206"],
         "discovered": "2026Q2",
-        "note": "光纤光缆全球前三；Q1季度环比+166%、持仓增量+57亿，Top300绝对增量第一",
+        "note": "光纤光缆全球前三；Q1净利+226%营收+28%，筹码最稳（-76家），Top200唯一A类标的",
     },
     "600522": {
         "name": "中天科技",
@@ -1187,6 +1187,43 @@ STOCK_UNIVERSE = {
         "discovered": "2026Q2",
         "note": "航空发动机国内唯一量产主机厂，国产大飞机/战机核心；Q1季度环比+20%，战略稀缺",
     },
+    # ── 2026Q2 季报研究新增 ─────────────────────────────────────────────────────
+    "688111": {
+        "name": "金山办公",
+        "theme": "AI办公软件",
+        "pool": "candidate", "cluster": "software",
+        "f_policy": 82,      "f_earnings": 85,
+        "signal_3d": "★★☆",
+        "fund_delta": -913,  "fund_pct": 180.0,
+        "nb_delta": 0.0,     "q1_yoy": 180,
+        "etf_overlap": [],
+        "discovered": "2026Q2",
+        "note": "WPS AI商业化落地；Q1净利+445%营收+24%ROE=15.7%，公募减持系高位兑现，非基本面恶化",
+    },
+    "688072": {
+        "name": "拓荆科技",
+        "theme": "半导体薄膜设备",
+        "pool": "candidate", "cluster": "semicon",
+        "f_policy": 88,      "f_earnings": 82,
+        "signal_3d": "★★☆",
+        "fund_delta": -651,  "fund_pct": 373.0,
+        "nb_delta": 0.0,     "q1_yoy": 373,
+        "etf_overlap": ["159995"],
+        "discovered": "2026Q2",
+        "note": "CVD/ALD薄膜设备国产替代核心；Q1净利+488%营收+57%，公募高位减持，国产设备景气持续",
+    },
+    "688002": {
+        "name": "睿创微纳",
+        "theme": "红外热成像/军工电子",
+        "pool": "candidate", "cluster": "defense",
+        "f_policy": 88,      "f_earnings": 80,
+        "signal_3d": "★★☆",
+        "fund_delta": -663,  "fund_pct": 208.0,
+        "nb_delta": 0.0,     "q1_yoy": 208,
+        "etf_overlap": ["512660"],
+        "discovered": "2026Q2",
+        "note": "红外热成像芯片及探测器龙头；Q1净利+228%营收+71%ROE=6.8%，军工+消费双线驱动",
+    },
 }
 
 # ─── 个股集群仓位上限（单独管理，不与ETF集群合并计算）─────────────────────────
@@ -1210,8 +1247,9 @@ STOCK_CLUSTER_MAX_WEIGHT = {
     "finance":          0.12,   # 金融（中信证券+中国平安）
     "food_bev":         0.08,   # 食品饮料（泸州老窖+海天味业）
     "industrial_auto":  0.10,   # 工业自动化（罗博特科+中控技术）
-    "defense":          0.12,   # 军工电子（航天电子+航发动力）
+    "defense":          0.12,   # 军工电子（航天电子+航发动力+睿创微纳）
     "shipping":         0.08,   # 航运（招商轮船）
+    "software":         0.08,   # 软件（金山办公）
 }
 
 # ─── 攻守切换 · 防御轮动池 ────────────────────────────────────────────────────

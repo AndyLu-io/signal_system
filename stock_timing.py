@@ -59,8 +59,11 @@ POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
 SCORE_BUY_STRONG = 6   # 2026-05回测: score=5 BUY_STRONG T+5超额-1.07%, T+1胜率40%; 提至6需更强共振
 SCORE_BUY_WATCH  = 5   # 2026-05回测: score=4 BUY_WATCH T+5均收-2.12%超额-3.33%，提至5使其不再触发
-SCORE_HOLD       = -2  # 2026-05回测: REDUCE后T+5均收+2.37%说明-2档减仓过早，放宽至-2保留HOLD
-SCORE_REDUCE     = -4  # 回测显示REDUCE后均反弹+2.16%，放宽触发条件
+SCORE_HOLD       = -3  # 2026-05回测: SELL_STOP后T+5超额+3.34%，止损普遍过早；-3减少误降REDUCE
+SCORE_REDUCE     = -5  # 2026-05回测: REDUCE后均反弹+2.60%~+6.04%，放宽至-5降低误止损频率
+
+# watch池高风险cluster，买入阈值提高+1（回测: chemical/food_bev/consumer T+5超额持续-2~-5%）
+_HIGH_RISK_CLUSTERS = frozenset({"chemical", "food_bev", "consumer"})
 
 _TENCENT_HEADERS = {
     "User-Agent": (
@@ -1571,14 +1574,26 @@ def main(dry: bool = False, force: bool = False) -> None:
                 dev_pct = (close - ma20) / ma20 * 100
                 reasons.append(f"★★★core偏离MA20+{dev_pct:.0f}%，追高风险降为观察")
 
+        # 高风险cluster买入门槛提升（回测: chemical/food_bev/consumer T+5超额-2~-5%，连续负向）
+        cluster_now = info.get("cluster", "")
+        if sig in ("BUY_STRONG", "BUY_WATCH") and cluster_now in _HIGH_RISK_CLUSTERS:
+            if score < SCORE_BUY_STRONG + 1:
+                sig = "HOLD"
+                reasons.append(f"高风险板块({cluster_now})，买入阈值+1，等待更强信号")
+
         # ── 减仓/止损过滤 ──────────────────────────────────────────────────
-        # SELL_STOP ★★★ core score=-4 强制降级REDUCE（回测: ★★★core SELL_STOP后T+5均涨+7.78%）
+        # SELL_STOP 降级规则（回测: SELL_STOP后T+5超额+3.34%，大量误杀）
         rsi_now = ind.get("rsi", 50)
         consec = ind.get("consec_below_ma60", 0)
+        cluster_now = info.get("cluster", "")
         if sig == "SELL_STOP":
-            if pool == "core" and info.get("signal_3d") == "★★★" and score >= -4:
+            # watch池禁止SELL_STOP（回测: watch/★☆☆ SELL_STOP后T+5超额+4.21%）
+            if pool == "watch":
                 sig = "REDUCE"
-                reasons.append("★★★核心池score>=-4暂缓止损，降为减仓观察")
+                reasons.append("观察池暂缓止损，降为减仓（watch池止损成本高）")
+            elif pool == "core" and info.get("signal_3d") == "★★★" and score >= -5:
+                sig = "REDUCE"
+                reasons.append("★★★核心池score>=-5暂缓止损，降为减仓观察")
             elif rsi_now < 25:
                 sig = "REDUCE"
                 reasons.append(f"RSI深度超卖({rsi_now:.0f}<25)，暂缓止损降为减仓")
