@@ -257,6 +257,7 @@ def run() -> None:
         rotation=rotation,
         data_health=data_health,
         reversals=reversals,
+        timing_risks=timing_risks,
     )
 
     if success:

@@ -232,8 +232,17 @@ def generate_signals(
         bucket = info.get("bucket", "none")
         cluster = info.get("cluster", "")
 
-        # D级/观察池/bucket空 → AVOID；C级 → HOLD观察（不配置但不禁止）
-        if pool == "watch" or tier == "D" or bucket == "none":
+        # D级/bucket空 → AVOID；C级 → HOLD观察
+        # 回测: composite>=53的watch池品种（卫星ETF、北方华创）实际涨+13-15%，值得观察
+        if pool == "watch":
+            if tier != "D" and composite >= 53:
+                signals.append(_make_signal(code, name, SIGNAL_HOLD, tier, composite,
+                                            0, 0, f"综合分{composite:.0f}，观察池高分品种关注"))
+            else:
+                signals.append(_make_signal(code, name, SIGNAL_AVOID, tier, composite,
+                                            0, 0, "政策/综合评分不足，禁止配置"))
+            continue
+        if tier == "D" or bucket == "none":
             signals.append(_make_signal(code, name, SIGNAL_AVOID, tier, composite,
                                         0, 0, "政策/综合评分不足，禁止配置"))
             continue
@@ -249,13 +258,19 @@ def generate_signals(
             continue
 
         # 信念等级不在机制允许范围
-        # 回测显示B级持仓在R2后T+5均涨+4.15%（68条全正），REDUCE为纯α损耗
-        # 已持仓与未持仓统一处理：不追加、不减仓，继续观察
+        # 回测: B级持仓在R2后T+5均涨+5.38%（59条），composite>=60的B级涨+10-17%
+        # 高分B级 → HOLD观察（不减仓），低分B级 → HOLD观察（不追加）
         if tier not in allowed_tiers:
             prefix = "已持仓，" if code in current_positions else ""
-            signals.append(_make_signal(code, name, SIGNAL_HOLD, tier, composite,
-                                        0, params["stop_loss_core"],
-                                        f"{prefix}{tier}级，{regime}暂不追加，持续观察"))
+            # R2下composite>=60的B级免减仓（回测: 减仓后涨15-17%是纯α损耗）
+            if regime == "R2" and tier == "B" and composite >= 60 and code in current_positions:
+                signals.append(_make_signal(code, name, SIGNAL_HOLD, tier, composite,
+                                            0, params["stop_loss_core"],
+                                            f"已持仓，{tier}级高分({composite:.0f})，{regime}免减仓"))
+            else:
+                signals.append(_make_signal(code, name, SIGNAL_HOLD, tier, composite,
+                                            0, params["stop_loss_core"],
+                                            f"{prefix}{tier}级，{regime}暂不追加，持续观察"))
             continue
 
         # 止损检查（已持仓品种）

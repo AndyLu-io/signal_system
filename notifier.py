@@ -10,12 +10,104 @@ from typing import Optional as _Optional
 
 from config import (FEISHU_WEBHOOK, FEISHU_WEBHOOKS, SIGNAL_BUY_STRONG, SIGNAL_BUY_WATCH,
                     SIGNAL_HOLD, SIGNAL_REDUCE, SIGNAL_SELL_STOP, SIGNAL_AVOID,
-                    DEFENSIVE_ROTATION_POOL)
+                    DEFENSIVE_ROTATION_POOL, ETF_UNIVERSE)
 from rotation_advisor import format_rotation_card_md as _fmt_rotation
 from feishu_pusher import post_card, post_text
 import etf_reversal
 
 logger = logging.getLogger(__name__)
+
+
+# ── 集群过热聚合 ──────────────────────────────────────────────────────────
+
+def calc_cluster_overheat(
+    signals: list[dict],
+    timing_risks: dict | None = None,
+) -> str:
+    """
+    聚合ETF集群层面的过热状态，返回飞书 markdown 段落。
+
+    当同一 cluster 内多只 ETF 同时 DANGER/CAUTION → 集群过热，
+    次日谁来接盘？连涨后的承接力不足。
+    """
+    if timing_risks is None:
+        return ""
+
+    cluster_data: dict[str, list[dict]] = {}
+    for s in signals:
+        code = s["code"]
+        info = ETF_UNIVERSE.get(code, {})
+        cluster = info.get("cluster", "")
+        if not cluster:
+            continue
+        risk = timing_risks.get(code, {})
+        if cluster not in cluster_data:
+            cluster_data[cluster] = []
+        cluster_data[cluster].append({
+            "code": code,
+            "name": s["name"],
+            "risk_level": risk.get("risk_level", "SAFE"),
+            "consec_up": risk.get("consec_up", 0),
+            "ma5_dev": risk.get("ma5_dev_pct", 0.0),
+        })
+
+    danger_clusters = []
+    caution_clusters = []
+
+    for cluster, etfs in cluster_data.items():
+        if len(etfs) < 2:
+            continue
+        danger_n = sum(1 for e in etfs if e["risk_level"] == "DANGER")
+        caution_n = sum(1 for e in etfs if e["risk_level"] == "CAUTION")
+        hot_n = danger_n + caution_n
+        avg_consec = sum(e["consec_up"] for e in etfs) / len(etfs)
+        avg_dev = sum(e["ma5_dev"] for e in etfs) / len(etfs)
+
+        if hot_n == 0:
+            continue
+
+        names = [e["name"] for e in etfs if e["risk_level"] in ("DANGER", "CAUTION")]
+
+        cluster_info = {
+            "cluster": cluster,
+            "hot_n": hot_n,
+            "total_n": len(etfs),
+            "danger_n": danger_n,
+            "avg_consec": avg_consec,
+            "avg_dev": avg_dev,
+            "names": names[:4],
+        }
+
+        if danger_n >= 2 or hot_n >= 3:
+            danger_clusters.append(cluster_info)
+        elif hot_n >= 2 or avg_consec >= 3:
+            caution_clusters.append(cluster_info)
+
+    if not danger_clusters and not caution_clusters:
+        return ""
+
+    lines = []
+    if danger_clusters:
+        lines.append("🔥 **集群过热 · 接盘真空风险 · 暂停追高**")
+        for v in danger_clusters:
+            names_str = "、".join(v["names"])
+            lines.append(
+                f"  🔴 {v['cluster']} {v['hot_n']}/{v['total_n']}只过热 "
+                f"均连涨{v['avg_consec']:.0f}日 均偏MA5+{v['avg_dev']:.1f}%"
+            )
+            lines.append(f"     过热品种: {names_str} — 次日承接力堪忧")
+
+    if caution_clusters:
+        lines.append("⚠️ **集群偏热 · 关注回落**")
+        for v in caution_clusters:
+            names_str = "、".join(v["names"])
+            lines.append(
+                f"  🟡 {v['cluster']} {v['hot_n']}/{v['total_n']}只偏热 "
+                f"均连涨{v['avg_consec']:.0f}日 均偏MA5+{v['avg_dev']:.1f}%"
+            )
+            lines.append(f"     偏热品种: {names_str}")
+
+    return "\n".join(lines)
 
 # 信号图标
 SIGNAL_EMOJI = {
@@ -100,6 +192,7 @@ def build_card_content(
     rotation: _Optional[object] = None,
     data_health: _Optional[object] = None,
     reversals: _Optional[list] = None,
+    timing_risks: _Optional[dict] = None,
 ) -> dict:
     """构建飞书 Interactive Card 消息体"""
 
@@ -212,6 +305,11 @@ def build_card_content(
                 *([{
                     "tag": "div",
                     "text": {"tag": "lark_md",
+                             "content": calc_cluster_overheat(signals, timing_risks)},
+                }, {"tag": "hr"}] if calc_cluster_overheat(signals, timing_risks) else []),
+                *([{
+                    "tag": "div",
+                    "text": {"tag": "lark_md",
                              "content": _fmt_rotation(rotation, DEFENSIVE_ROTATION_POOL)},
                 }, {"tag": "hr"}] if rotation is not None and rotation.strength != "NORMAL" else []),
                 *sections,
@@ -245,12 +343,13 @@ def send_signal(
     rotation: _Optional[object] = None,
     data_health: _Optional[object] = None,
     reversals: _Optional[list] = None,
+    timing_risks: _Optional[dict] = None,
 ) -> bool:
     if run_date is None:
         run_date = datetime.today().strftime("%Y-%m-%d")
 
     card = build_card_content(regime, regime_score, signals, risk_summary, run_date,
-                              sentiment, rotation, data_health, reversals)
+                              sentiment, rotation, data_health, reversals, timing_risks)
 
     targets = FEISHU_WEBHOOKS if webhook == FEISHU_WEBHOOK else [webhook]
     return post_card(card, targets)

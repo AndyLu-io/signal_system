@@ -57,8 +57,8 @@ REGIME_STOCK_MAX = {"R1": 8, "R2": 6, "R3": 4, "R4": 0}
 # pool → 仓位系数
 POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
-SCORE_BUY_STRONG = 5
-SCORE_BUY_WATCH  = 5   # 2026-05回测: score=4 BUY_WATCH T+5均收-2.12%超额-3.33%，提至5使其不再触发；score=4→near_buy观察
+SCORE_BUY_STRONG = 6   # 2026-05回测: score=5 BUY_STRONG T+5超额-1.07%, T+1胜率40%; 提至6需更强共振
+SCORE_BUY_WATCH  = 5   # 2026-05回测: score=4 BUY_WATCH T+5均收-2.12%超额-3.33%，提至5使其不再触发
 SCORE_HOLD       = -2  # 2026-05回测: REDUCE后T+5均收+2.37%说明-2档减仓过早，放宽至-2保留HOLD
 SCORE_REDUCE     = -4  # 回测显示REDUCE后均反弹+2.16%，放宽触发条件
 
@@ -242,6 +242,18 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         else:
             break
 
+    # 连续收涨天数（含今日实时行，用于主题过热判断）
+    consec_up_days = 0
+    for i in range(len(all_closes) - 1, 0, -1):
+        if all_closes[i] > all_closes[i - 1]:
+            consec_up_days += 1
+        else:
+            break
+
+    # 均线偏离度（用于个股/主题追高风险）
+    ma5_dev_pct = round((float(close.iloc[-1]) - float(ma5.iloc[-1])) / float(ma5.iloc[-1]) * 100, 2)
+    ma20_dev_pct = round((float(close.iloc[-1]) - float(ma20.iloc[-1])) / float(ma20.iloc[-1]) * 100, 2)
+
     # 布林带 (20, 2σ)
     boll_std   = close.rolling(20).std()
     boll_upper = float((ma20 + 2 * boll_std).iloc[-1])
@@ -275,6 +287,9 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         "ma60_slope_5d":   ma60_slope_5d,
         "consec_down_days": consec_down_days,
         "consec_below_ma60":  consec_below_ma60,
+        "consec_up_days":     consec_up_days,
+        "ma5_dev_pct":        ma5_dev_pct,
+        "ma20_dev_pct":       ma20_dev_pct,
         "boll_upper":         boll_upper,
         "boll_lower":         boll_lower,
         "boll_pct":           round(boll_pct, 3),
@@ -608,8 +623,127 @@ def calc_stop(ind: dict) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 攻守切换 · 防御轮动池
+# 主题/集群过热检测
+# 连涨后谁来接盘？同一集群多只品种同时大涨 → 次日冲高回落概率高
 # ─────────────────────────────────────────────────────────────────────────────
+
+# 过热判定阈值
+_CLUSTER_OVERHEAT_CONSEC = 3       # 集群内≥3只连涨≥3日 → 过热预警
+_CLUSTER_OVERHEAT_DEV    = 4.0     # 集群均偏离MA5≥4% → 过热确认
+_CLUSTER_DANGER_CONSEC   = 4       # 集群内≥2只连涨≥4日 → 接盘危险
+
+
+def calc_theme_overheat(results: list[dict]) -> dict[str, dict]:
+    """
+    对每个 cluster 计算过热状态，返回 {cluster: overheat_info}。
+
+    overheat_info 包含:
+      level: "SAFE" / "CAUTION" / "DANGER"
+      consec_up_stocks: 连涨≥3日的品种数
+      avg_ma5_dev: 集群平均MA5偏离度(%)
+      avg_rsi: 集群平均RSI
+      avg_consec: 集群平均连涨天数
+      stock_names: 过热品种名称列表
+      note: 描述文字
+    """
+    cluster_data: dict[str, list[dict]] = {}
+    for r in results:
+        cluster = r["info"].get("cluster", "")
+        if not cluster:
+            continue
+        if cluster not in cluster_data:
+            cluster_data[cluster] = []
+        cluster_data[cluster].append(r)
+
+    overheat_map: dict[str, dict] = {}
+
+    for cluster, stocks in cluster_data.items():
+        if len(stocks) < 2:
+            continue
+
+        consec_list = [s["ind"].get("consec_up_days", 0) for s in stocks]
+        dev_list    = [s["ind"].get("ma5_dev_pct", 0.0) for s in stocks]
+        rsi_list    = [s["ind"].get("rsi", 50.0) for s in stocks]
+
+        avg_consec = sum(consec_list) / len(consec_list)
+        avg_dev    = sum(dev_list) / len(dev_list)
+        avg_rsi    = sum(rsi_list) / len(rsi_list)
+
+        consec_up_3 = sum(1 for c in consec_list if c >= 3)
+        consec_up_4 = sum(1 for c in consec_list if c >= 4)
+
+        hot_names = [s["name"] for s in stocks if s["ind"].get("consec_up_days", 0) >= 3]
+
+        # 判定等级
+        level = "SAFE"
+        note_parts = []
+
+        if consec_up_4 >= 2:
+            level = "DANGER"
+            note_parts.append(f"≥2只连涨4日+，接盘真空风险极高")
+        elif consec_up_3 >= _CLUSTER_OVERHEAT_CONSEC and avg_dev >= _CLUSTER_OVERHEAT_DEV:
+            level = "DANGER"
+            note_parts.append(f"≥{consec_up_3}只连涨3日+ 均偏MA5+{avg_dev:.1f}%，追高危险")
+        elif consec_up_3 >= 2 or avg_dev >= _CLUSTER_OVERHEAT_DEV:
+            level = "CAUTION"
+            note_parts.append(f"连涨品种增多(≥{consec_up_3}只) 或偏离MA5+{avg_dev:.1f}%")
+        elif avg_consec >= 2 and avg_rsi >= 60:
+            level = "CAUTION"
+            note_parts.append(f"集群均连涨{avg_consec:.0f}日 RSI={avg_rsi:.0f}偏热")
+
+        note = "; ".join(note_parts) if note_parts else "集群热度中性"
+        if level != "SAFE" and hot_names:
+            note += f" — 过热品种: {', '.join(hot_names[:4])}"
+
+        theme_names = [s["info"].get("theme", "") for s in stocks[:3]]
+        cluster_label = cluster + "(" + "/".join(theme_names) + ")"
+
+        overheat_map[cluster] = {
+            "level":          level,
+            "cluster_label":  cluster_label,
+            "consec_up_3":    consec_up_3,
+            "consec_up_4":    consec_up_4,
+            "avg_consec":     round(avg_consec, 1),
+            "avg_ma5_dev":    round(avg_dev, 1),
+            "avg_rsi":        round(avg_rsi, 0),
+            "n_stocks":       len(stocks),
+            "hot_names":      hot_names,
+            "note":           note,
+        }
+
+    return overheat_map
+
+
+def _fmt_theme_overheat_section(overheat_map: dict[str, dict]) -> str:
+    """将集群过热状态渲染为飞书 markdown 段落。"""
+    danger_clusters  = [v for v in overheat_map.values() if v["level"] == "DANGER"]
+    caution_clusters = [v for v in overheat_map.values() if v["level"] == "CAUTION"]
+
+    if not danger_clusters and not caution_clusters:
+        return ""
+
+    lines = []
+    if danger_clusters:
+        lines.append("🔥 **集群过热 · 次日接盘风险高 · 暂停追高**")
+        for v in danger_clusters:
+            lines.append(
+                f"  🔴 **{v['cluster_label']}** "
+                f"连涨≥3日:{v['consec_up_3']}/{v['n_stocks']}只 "
+                f"均偏MA5+{v['avg_ma5_dev']:.1f}% RSI={v['avg_rsi']:.0f}"
+            )
+            lines.append(f"     *{v['note']}*")
+
+    if caution_clusters:
+        lines.append("⚠️ **集群偏热 · 关注回落风险**")
+        for v in caution_clusters:
+            lines.append(
+                f"  🟡 {v['cluster_label']} "
+                f"连涨≥3日:{v['consec_up_3']}/{v['n_stocks']}只 "
+                f"均偏MA5+{v['avg_ma5_dev']:.1f}% RSI={v['avg_rsi']:.0f}"
+            )
+            lines.append(f"     *{v['note']}*")
+
+    return "\n".join(lines)
 
 _RANK_LABEL = {1: "🛡️ 极防御（公用/货币）", 2: "🔵 高股息蓝筹", 3: "🟡 消费/医药防御"}
 
@@ -1162,7 +1296,8 @@ def _coiling_line(r: dict) -> str:
 
 
 def build_card(results: list[dict], regime: str, ts: str,
-               ctx: dict | None = None, reversals: list[dict] | None = None) -> dict:
+               ctx: dict | None = None, reversals: list[dict] | None = None,
+               overheat_map: dict[str, dict] | None = None) -> dict:
     color       = REGIME_COLOR.get(regime, "blue")
     regime_desc = REGIME_LABEL.get(regime, regime)
     max_pos     = REGIME_STOCK_MAX.get(regime, 0)
@@ -1248,6 +1383,15 @@ def build_card(results: list[dict], regime: str, ts: str,
         if macro_text:
             elements += [
                 {"tag": "div", "text": {"tag": "lark_md", "content": macro_text}},
+                {"tag": "hr"},
+            ]
+
+    # ── 集群过热警告 ──────────────────────────────────────────────────────
+    if overheat_map:
+        oh_text = _fmt_theme_overheat_section(overheat_map)
+        if oh_text:
+            elements += [
+                {"tag": "div", "text": {"tag": "lark_md", "content": oh_text}},
                 {"tag": "hr"},
             ]
 
@@ -1404,19 +1548,38 @@ def main(dry: bool = False, force: bool = False) -> None:
 
         sig  = signal_type(score)
 
-        # BUY_WATCH 质量过滤：★☆☆ 单维共振不够强，降级为 HOLD（BUY_WATCH阈值已提至5，此处兜底）
+        # ── 买入信号质量过滤 ──────────────────────────────────────────────────
+        pool = info.get("pool", "watch")
+
+        # watch池禁止生成买入信号（回测: watch池BUY超额-4.41%）
+        if sig in ("BUY_STRONG", "BUY_WATCH") and pool == "watch":
+            sig = "HOLD"
+            reasons.append("观察池(watch)，等待进入核心/候选池后再买入")
+
+        # BUY_WATCH ★☆☆ 单维共振不够强，降级为 HOLD
         if sig == "BUY_WATCH" and info.get("signal_3d", "★☆☆") == "★☆☆":
             sig = "HOLD"
             reasons.append("单维共振(★☆☆)，等待信号强化")
 
-        # SELL_STOP 4日确认 + RSI超卖豁免
-        # 2026-05回测: SELL_STOP后T+5均收+6.32%，止损后股票大幅反弹，说明止损过敏
-        # 修复1：确认天数3→4（需连续4日跌破MA60）
-        # 修复2：RSI<25深度超卖时暂缓止损（底部卖飞风险高）
+        # ★★★ core BUY追高过滤：偏离MA20>=8%时降级为HOLD观察
+        # 回测: ★★★ core BUY_WATCH T+1胜率仅29.6%，追高是核心原因
+        if sig in ("BUY_STRONG", "BUY_WATCH") and pool == "core" and info.get("signal_3d") == "★★★":
+            close = ind.get("close", 0)
+            ma20  = ind.get("ma20", 0)
+            if ma20 > 0 and (close - ma20) / ma20 * 100 >= 8:
+                sig = "HOLD"
+                dev_pct = (close - ma20) / ma20 * 100
+                reasons.append(f"★★★core偏离MA20+{dev_pct:.0f}%，追高风险降为观察")
+
+        # ── 减仓/止损过滤 ──────────────────────────────────────────────────
+        # SELL_STOP ★★★ core score=-4 强制降级REDUCE（回测: ★★★core SELL_STOP后T+5均涨+7.78%）
         rsi_now = ind.get("rsi", 50)
         consec = ind.get("consec_below_ma60", 0)
         if sig == "SELL_STOP":
-            if rsi_now < 25:
+            if pool == "core" and info.get("signal_3d") == "★★★" and score >= -4:
+                sig = "REDUCE"
+                reasons.append("★★★核心池score>=-4暂缓止损，降为减仓观察")
+            elif rsi_now < 25:
                 sig = "REDUCE"
                 reasons.append(f"RSI深度超卖({rsi_now:.0f}<25)，暂缓止损降为减仓")
             elif consec < 4:
@@ -1449,10 +1612,51 @@ def main(dry: bool = False, force: bool = False) -> None:
 
     results.sort(key=lambda r: -r["score"])
 
+    # ── 集群/主题过热检测 ──────────────────────────────────────────────────
+    overheat_map = calc_theme_overheat(results)
+
+    # 二次过滤：过热集群中的买入信号降级
+    for r in results:
+        cluster = r["info"].get("cluster", "")
+        if cluster not in overheat_map:
+            continue
+        oh = overheat_map[cluster]
+        sig = r["signal"]
+        if sig not in ("BUY_STRONG", "BUY_WATCH"):
+            continue
+
+        consec_self = r["ind"].get("consec_up_days", 0)
+        dev_ma5     = r["ind"].get("ma5_dev_pct", 0.0)
+
+        # DANGER: 集群严重过热 + 自身连涨≥3 → 降为HOLD观察
+        if oh["level"] == "DANGER" and consec_self >= 3:
+            r["signal"] = "HOLD"
+            r["position_pct"] = 0
+            r["reasons"].append(
+                f"集群过热({oh['cluster_label']})+连涨{consec_self}日，等回踩再介入"
+            )
+            log.info(f"  集群过热拦截: {r['name']} {cluster} DANGER→HOLD")
+        # CAUTION: 集群偏热 + 自身偏离MA5≥4% → 强买降为观察
+        elif oh["level"] == "CAUTION" and sig == "BUY_STRONG" and dev_ma5 >= 4:
+            r["signal"] = "BUY_WATCH"
+            r["position_pct"] = calc_position("BUY_WATCH", r["info"], regime)
+            r["reasons"].append(f"集群偏热+偏离MA5+{dev_ma5:.1f}%，强买降为观察")
+            log.info(f"  集群偏热降级: {r['name']} {cluster} CAUTION→BUY_WATCH")
+        # CAUTION + 自身连涨≥4 → 降为HOLD观察
+        elif oh["level"] == "CAUTION" and consec_self >= 4:
+            r["signal"] = "HOLD"
+            r["position_pct"] = 0
+            r["reasons"].append(f"集群偏热+自身连涨{consec_self}日，等回踩")
+            log.info(f"  集群偏热拦截: {r['name']} {cluster} CAUTION→HOLD")
+
+    danger_count = sum(1 for v in overheat_map.values() if v["level"] == "DANGER")
+    caution_count = sum(1 for v in overheat_map.values() if v["level"] == "CAUTION")
+    log.info(f"集群过热: DANGER={danger_count} CAUTION={caution_count} SAFE={len(overheat_map)-danger_count-caution_count}")
+
     reversals.sort(key=lambda r: -r["rev_pts"])
     log.info(f"底部反转候选: {len(reversals)} 只 — {[r['name'] for r in reversals]}")
 
-    card = build_card(results, regime, ts, ctx=ctx, reversals=reversals)
+    card = build_card(results, regime, ts, ctx=ctx, reversals=reversals, overheat_map=overheat_map)
     push_feishu(card, dry=dry)
 
     snap = _DIR / "logs" / f"stock_timing_{today}.json"
@@ -1463,6 +1667,8 @@ def main(dry: bool = False, force: bool = False) -> None:
                 | {"close": r["ind"]["close"], "rsi": r["ind"]["rsi"],
                    "vol_ratio": r["ind"]["vol_ratio"], "data_date": r["ind"]["data_date"],
                    "consec_below_ma60": r["ind"]["consec_below_ma60"],
+                   "consec_up_days": r["ind"].get("consec_up_days", 0),
+                   "ma5_dev_pct": r["ind"].get("ma5_dev_pct", 0),
                    "pool": r["info"].get("pool", ""), "signal_3d": r["info"].get("signal_3d", ""),
                    "theme": r["info"].get("theme", ""), "cluster": r["info"].get("cluster", "")}
                 for r in results
