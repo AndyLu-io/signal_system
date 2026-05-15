@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import ETF_UNIVERSE, FEISHU_WEBHOOK, INDEX_CSI300
+from config import ETF_UNIVERSE, FEISHU_WEBHOOK, INDEX_CSI300, DEFENSIVE_ROTATION_POOL
 import data_fetcher as df_api
 import sentiment_gauge
 import rotation_advisor
@@ -72,7 +72,8 @@ def run() -> None:
     logger.info("获取ETF历史K线及市场数据...")
     etf_codes = list(ETF_UNIVERSE.keys())
     etf_prices    = df_api.get_etf_prices(etf_codes, days=120)  # MA60斜率需要65+根
-    csi300        = df_api.get_index_prices(INDEX_CSI300, days=40)
+    csi300        = df_api.get_index_prices(INDEX_CSI300, days=80)
+    gem           = df_api.get_index_prices("399006", days=80)   # 创业板指
     breadth       = df_api.get_market_breadth()
     north_flow    = df_api.get_north_flow(days=5)
     policy_prices = df_api.get_etf_prices(["159326", "512480", "515880"], days=3)
@@ -85,7 +86,34 @@ def run() -> None:
 
     # ── 2. 买点扫描 ──────────────────────────────────────────────────────────
     logger.info(f"扫描{_MODE_LABEL[scan_mode]}...")
-    reading = scanner.scan_tail_market(ETF_UNIVERSE, etf_prices, main_force_flows=main_force_flows, vol_factor=vol_factor)
+    reading = scanner.scan_tail_market(
+        ETF_UNIVERSE, etf_prices,
+        main_force_flows=main_force_flows,
+        vol_factor=vol_factor,
+        index_hist={"000300": csi300, "399006": gem},
+        defensive_pool=DEFENSIVE_ROTATION_POOL,
+    )
+
+    # 读取今日主流程评分，挂载到每个尾盘信号
+    today_date_compact = datetime.today().strftime("%Y%m%d")
+    main_signal_map: dict[str, dict] = {}
+    _main_log = LOG_DIR / f"signal_detail_{today_date_compact}.json"
+    if _main_log.exists():
+        try:
+            _main_data = json.loads(_main_log.read_text(encoding="utf-8"))
+            for _s in _main_data.get("signals", []):
+                main_signal_map[_s["code"]] = _s
+        except Exception as _e:
+            logger.warning(f"读取主流程评分失败: {_e}")
+    else:
+        logger.info("今日主流程日志不存在，跳过主流程评分挂载")
+
+    for sig in reading.signals:
+        ms = main_signal_map.get(sig.code)
+        if ms:
+            sig.main_composite = float(ms.get("composite", 0.0))
+            sig.main_tier      = ms.get("tier", "")
+            sig.main_signal    = ms.get("signal", "")
 
     logger.info(f"大盘情绪: {'恐慌' if reading.market_panic else '正常'} | {reading.market_note}")
     for s in reading.signals:
@@ -103,12 +131,8 @@ def run() -> None:
     _north_5d_deal_avg: float | None = None
     _north_today_deal: float | None = None
     if north_flow is not None and len(north_flow) >= 1:
-        try:
-            net_s = north_flow["net_buy_billion"].dropna()
-            if len(net_s) >= 1:
-                _north_5d = round(float(net_s.tail(5).sum()), 2)
-        except Exception:
-            pass
+        # 优先用接口直接返回的5日合计（attrs），废额度后缓存累加不可靠
+        _north_5d = north_flow.attrs.get("net_buy_5d")
         try:
             deal_s = north_flow["deal_amt_billion"].dropna()
             if len(deal_s) >= 1:
@@ -165,6 +189,9 @@ def run() -> None:
                     "ma60_trend_pct": s.ma60_trend_pct,
                     "main_force_flow": s.main_force_flow,
                     "consec_down_days": s.consec_down_days,
+                    "main_composite": s.main_composite,
+                    "main_tier": s.main_tier,
+                    "main_signal": s.main_signal,
                     "triggers": s.triggers, "cautions": s.cautions,
                 }
                 for s in reading.signals

@@ -233,6 +233,42 @@ def _fetch_em_net_buy_today() -> Optional[float]:
         return None
 
 
+def _fetch_em_net_buy_period() -> dict[str, Optional[float]]:
+    """
+    从东方财富 RPT_MUTUAL_NETINFLOW_STATISTICS 获取多周期净买入合计（亿元）。
+    TIME_TYPE: 1=今日  2=近5日  3=近10日  4=近20日
+    废额度后历史日度数据不可得，但多周期合计接口仍可用，直接拿5日/10日合计最可靠。
+    返回 {"today": float, "5d": float, "10d": float}，任一周期失败返回 None。
+    """
+    result: dict[str, Optional[float]] = {"today": None, "5d": None, "10d": None}
+    _type_map = {"1": "today", "2": "5d", "3": "10d"}
+    try:
+        r = requests.get(
+            _EM_HSGT_URL,
+            params={
+                "reportName": "RPT_MUTUAL_NETINFLOW_STATISTICS",
+                "columns": "TOTAL_INFLOW_BOTH,TIME_TYPE",
+                "filter": '(DIRECTION_TYPE="2")',
+                "token": _EM_HSGT_TOKEN,
+                "client": "WEB",
+            },
+            headers={"Referer": "https://data.eastmoney.com/hsgt/"},
+            timeout=10,
+        )
+        d = r.json()
+        if not d.get("success"):
+            return result
+        for item in (d.get("result") or {}).get("data") or []:
+            tt = str(item.get("TIME_TYPE", ""))
+            key = _type_map.get(tt)
+            val = item.get("TOTAL_INFLOW_BOTH")
+            if key and val is not None:
+                result[key] = round(float(val) / 10000, 2)
+    except Exception as e:
+        logger.warning(f"东方财富北向多周期净买入获取失败: {e}")
+    return result
+
+
 def _fetch_em_deal_amt(days: int = 10) -> list[dict]:
     """
     从东方财富 RPT_MUTUAL_DEALAMT 获取北向成交总额（亿元）。
@@ -396,10 +432,13 @@ def get_north_flow(days: int = 10) -> Optional[pd.DataFrame]:
                     existing["deal_amt_billion"] = rec["deal_amt_billion"]
                     changed = True
 
-    # ── Step 1.5：自动获取今日精确净买入（Tier-2，RPT_MUTUAL_NETINFLOW_STATISTICS）
-    # 每次运行刷新当日值，每日积累一条缓存记录；手动文件（Step 2）优先级更高会覆盖此值
+    # ── Step 1.5：同时获取今日净买入 + 5日/10日合计（直接来自接口，不依赖缓存累加）
     today_str = datetime.today().strftime("%Y-%m-%d")
-    auto_net_today = _fetch_em_net_buy_today()
+    period_net = _fetch_em_net_buy_period()
+    auto_net_today = period_net.get("today")
+    auto_net_5d    = period_net.get("5d")
+    auto_net_10d   = period_net.get("10d")
+
     if auto_net_today is not None and abs(auto_net_today) >= 0.01:
         updated_today = False
         for existing in cache:
@@ -416,7 +455,11 @@ def get_north_flow(days: int = 10) -> Optional[pd.DataFrame]:
             })
             cached_dates.add(today_str)
             changed = True
-        logger.info(f"今日北向净买入（自动）: {auto_net_today:+.2f}亿")
+        logger.info(
+            f"今日北向净买入（自动）: {auto_net_today:+.2f}亿"
+            + (f" | 近5日合计: {auto_net_5d:+.2f}亿" if auto_net_5d is not None else "")
+            + (f" | 近10日合计: {auto_net_10d:+.2f}亿" if auto_net_10d is not None else "")
+        )
 
     # ── Step 2：扫描手动文件，写入净买入（优先级高于 Tier-2 自动值）──────────
     manual_net = _parse_manual_north_files()
@@ -460,7 +503,12 @@ def get_north_flow(days: int = 10) -> Optional[pd.DataFrame]:
         logger.warning("北向资金：成交总额和净买入均无数据，返回 None")
         return None
 
-    return df[["date", "deal_amt_billion", "net_buy_billion"]]
+    result = df[["date", "deal_amt_billion", "net_buy_billion"]]
+    # 多周期合计直接来自接口，附在 attrs；下游用 north_flow.attrs["net_buy_5d"] 读取
+    # 避免用缓存日度累加（废额度后历史日度净买入不再可靠）
+    result.attrs["net_buy_5d"]  = auto_net_5d
+    result.attrs["net_buy_10d"] = auto_net_10d
+    return result
 
 
 # ─── 两融余额（AkShare macro_china_market_margin_sh） ─────────────────────────

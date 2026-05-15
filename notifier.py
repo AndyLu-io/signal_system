@@ -12,6 +12,7 @@ from config import (FEISHU_WEBHOOK, FEISHU_WEBHOOKS, SIGNAL_BUY_STRONG, SIGNAL_B
                     SIGNAL_HOLD, SIGNAL_REDUCE, SIGNAL_SELL_STOP, SIGNAL_AVOID,
                     DEFENSIVE_ROTATION_POOL, ETF_UNIVERSE)
 from rotation_advisor import format_rotation_card_md as _fmt_rotation
+from tail_market_scanner import detect_cluster_panic, fmt_cluster_panic_block, detect_offense_surge, fmt_offense_surge_block
 from feishu_pusher import post_card, post_text
 import etf_reversal
 
@@ -193,6 +194,8 @@ def build_card_content(
     data_health: _Optional[object] = None,
     reversals: _Optional[list] = None,
     timing_risks: _Optional[dict] = None,
+    panic_clusters: _Optional[list] = None,
+    offense_surge: _Optional[list] = None,
 ) -> dict:
     """构建飞书 Interactive Card 消息体"""
 
@@ -312,6 +315,16 @@ def build_card_content(
                     "text": {"tag": "lark_md",
                              "content": _fmt_rotation(rotation, DEFENSIVE_ROTATION_POOL)},
                 }, {"tag": "hr"}] if rotation is not None and rotation.strength != "NORMAL" else []),
+                *([{
+                    "tag": "div",
+                    "text": {"tag": "lark_md",
+                             "content": fmt_cluster_panic_block(panic_clusters)},
+                }, {"tag": "hr"}] if panic_clusters else []),
+                *([{
+                    "tag": "div",
+                    "text": {"tag": "lark_md",
+                             "content": fmt_offense_surge_block(offense_surge)},
+                }, {"tag": "hr"}] if offense_surge and not panic_clusters else []),
                 *sections,
                 *([{
                     "tag": "div",
@@ -344,12 +357,15 @@ def send_signal(
     data_health: _Optional[object] = None,
     reversals: _Optional[list] = None,
     timing_risks: _Optional[dict] = None,
+    panic_clusters: _Optional[list] = None,
+    offense_surge: _Optional[list] = None,
 ) -> bool:
     if run_date is None:
         run_date = datetime.today().strftime("%Y-%m-%d")
 
     card = build_card_content(regime, regime_score, signals, risk_summary, run_date,
-                              sentiment, rotation, data_health, reversals, timing_risks)
+                              sentiment, rotation, data_health, reversals, timing_risks,
+                              panic_clusters, offense_surge)
 
     targets = FEISHU_WEBHOOKS if webhook == FEISHU_WEBHOOK else [webhook]
     return post_card(card, targets)

@@ -40,6 +40,7 @@ from data_fetcher import (  # noqa: E402
 )
 from sentiment_gauge import calc_market_sentiment  # noqa: E402
 from rotation_advisor import calc_rotation_signal, RotationSignal, DIM_EMOJI, STRENGTH_LABEL  # noqa: E402
+from tail_market_scanner import detect_cluster_panic, fmt_cluster_panic_block, detect_offense_surge, fmt_offense_surge_block  # noqa: E402
 from utils import is_trading_day as _utils_is_trading_day  # noqa: E402
 from feishu_pusher import post_card as _post_card  # noqa: E402
 
@@ -474,11 +475,15 @@ def check_reversal(
     ctx: dict | None = None,
 ) -> dict | None:
     """
-    底部反转候选筛选（满分18分，≥9分入选）。
+    底部反转候选筛选（满分22分，≥10分入选）。
 
     硬门槛（必须全部满足才进入评分）：
       ① 价格在布林带中位以下（boll_pct < 0.50），即处于调整/底部区域
       ② MACD 有改善迹象（日线pre_golden_cross / 刚金叉 / 绿柱收缩）
+      ③ MA60趋势非陡峭下行（ma60_slope_5d ≥ -0.8），排除结构性下跌（如通威股份光伏产能过剩）
+      ④ 价格不低于MA60的-13%（close/ma60 ≥ 0.87），深度破位≠反转
+      ⑤ 成交量≥0.8倍均值（vol_ratio ≥ 0.8），无量的反弹不可信
+      ⑥ 盈利质量底线（f_earnings ≥ 60），基本面支撑反转
 
     技术面（满分6）：
       日线MACD即将金叉  +2 ｜ 已金叉/绿柱缩  +1
@@ -489,13 +494,15 @@ def check_reversal(
       月线站MA6且上升    +2 ｜ 任满足1          +1
     资金面（满分2）：
       主力净流入>0.5亿  +2 ｜ 中性             +1
-    政策面（满分4）：
+    政策面（满分6）：
       f_policy ≥ 85     +2 ｜ ≥ 70            +1
-      f_earnings ≥ 75   +1（盈利支撑）
+      f_earnings ≥ 80   +2 ｜ ≥ 75            +1（盈利强可补偿政策弱势，如万华化学/中国神华）
       北向5日净流入>50亿 +1
     情绪面（满分2）：
       市场情绪COLD/NORMAL +2（最佳买入窗口）
       市场情绪WARM        +1
+    量价确认（满分2）：
+      量比≥1.5（强量反转）+2 ｜ 量比≥1.2       +1
     """
     # ── 硬门槛 ──────────────────────────────────────────────────────────
     bp = ind.get("boll_pct", 0.5)
@@ -512,9 +519,28 @@ def check_reversal(
     if not macd_improving:   # MACD 没有改善迹象 → 仍在下跌中段
         return None
 
+    # MA60趋势方向：陡峭下行=结构性下跌，不是反转（通威光伏产能过剩典型案例）
+    ma60_slope = ind.get("ma60_slope_5d", 0.0)
+    if ma60_slope < -0.8:
+        return None
+
+    # 价格与MA60距离：深度破位(>-13%)不是反转，是加速下跌
+    close_val = ind.get("close", 0)
+    ma60_val  = ind.get("ma60", 0)
+    if ma60_val > 0 and close_val < ma60_val * 0.87:
+        return None
+
+    # 盈利质量底线：基本面无支撑的"反转"多为技术假信号（通威f_earnings=58被此门槛拦截）
+    _info_gate = info or {}
+    if _info_gate.get("f_earnings", 60) < 60:
+        return None
+
+    # 低量提示（不作为硬门槛，改为评分维度扣分，万华化学量比0.53不应被直接淘汰）
+    vr = ind.get("vol_ratio", 0.5)
+
     pts      = 0
     details  = []
-    dim_tech = dim_cycle = dim_fund = dim_policy = dim_senti = 0
+    dim_tech = dim_cycle = dim_fund = dim_policy = dim_senti = dim_vol = 0
 
     # ── 维度1: 技术面 ─────────────────────────────────────────────────
     if ind.get("pre_golden_cross"):
@@ -575,7 +601,9 @@ def check_reversal(
         pts += 2; dim_policy += 2; details.append(f"强政策支撑(f_policy={f_policy})")
     elif f_policy >= 70:
         pts += 1; dim_policy += 1; details.append(f"政策评分{f_policy}")
-    if f_earnings >= 75:
+    if f_earnings >= 80:
+        pts += 2; dim_policy += 2; details.append(f"盈利质量强(f_earnings={f_earnings})🛡️")
+    elif f_earnings >= 75:
         pts += 1; dim_policy += 1; details.append(f"盈利质量佳(f_earnings={f_earnings})")
 
     north_5d = (ctx or {}).get("north_5d")
@@ -593,7 +621,13 @@ def check_reversal(
         else:
             details.append(f"市场情绪{slevel}⚠️，反转需等回落")
 
-    if pts < 9:              # 至少9分才是高质量反转候选
+    # ── 维度6: 量价确认 ─────────────────────────────────────────────────
+    if vr >= 1.5:
+        pts += 2; dim_vol += 2; details.append(f"放量反转(量比{vr:.1f}x)")
+    elif vr >= 1.2:
+        pts += 1; dim_vol += 1; details.append(f"量价配合(量比{vr:.1f}x)")
+
+    if pts < 9:              # 至少9分入选；4个新增硬门槛(MA60slope/close/MA60/f_earnings≥60)已把通威等结构性下跌股拦住
         return None
 
     return {
@@ -607,6 +641,7 @@ def check_reversal(
         "dim_fund":    dim_fund,
         "dim_policy":  dim_policy,
         "dim_senti":   dim_senti,
+        "dim_vol":     dim_vol,
     }
 
 
@@ -932,11 +967,14 @@ def fetch_macro_context() -> dict:
     try:
         north_df = get_north_flow(days=8)
         if north_df is not None and len(north_df) >= 1:
-            # 精确净买入（手动数据）
+            # 今日净买入（最后一行实时值）
             net_s = north_df["net_buy_billion"].dropna()
             if len(net_s) >= 1:
                 ctx["north_today"] = round(float(net_s.iloc[-1]), 2)
-                ctx["north_5d"]    = round(float(net_s.tail(5).sum()), 2)
+            # 5日合计：优先用接口直接返回的多周期合计（attrs），废额度后缓存累加不可靠
+            north_5d = north_df.attrs.get("net_buy_5d")
+            if north_5d is not None:
+                ctx["north_5d"] = north_5d
             # 成交总额（活跃度代理，东方财富自动）
             deal_s = north_df["deal_amt_billion"].dropna()
             if len(deal_s) >= 1:
@@ -979,6 +1017,28 @@ def fetch_macro_context() -> dict:
             north_5d_deal_avg=ctx.get("north_5d_deal_avg"),
             north_today_deal=ctx.get("north_today_deal"),
         )
+
+    # ── 6. 集群恐慌检测（用板块ETF快照的今日涨跌幅） ─────────────────────────
+    # sector_snaps 已在步骤4拉取，key是中文名；这里用STOCK_UNIVERSE做集群映射
+    # 同时从all_klines（主流程传入后会有）或sector_snaps补充涨跌幅
+    try:
+        # 用 sector_snaps 里的行情构造 {code: chg_pct}（按code反查）
+        _sec_snaps = ctx.get("sector_snaps", {})
+        # 同时尝试从indices拿大盘级别
+        change_pcts: dict[str, float] = {}
+        # sector_snaps key是中文名，需要反查_SECTOR_ETFS获取code
+        for sec_name, sym in _SECTOR_ETFS.items():
+            snap = _sec_snaps.get(sec_name)
+            if snap and snap.get("chg_pct") is not None:
+                # sym格式 sh515880 → code 515880
+                code = sym[2:]
+                change_pcts[code] = snap["chg_pct"]
+        panic_clusters = detect_cluster_panic(STOCK_UNIVERSE, change_pcts)
+        # 补充：用ETF行情覆盖/补充STOCK_UNIVERSE里匹配cluster的品种
+        if panic_clusters:
+            ctx["panic_clusters"] = panic_clusters
+    except Exception as e:
+        log.debug(f"集群恐慌检测: {e}")
 
     return ctx
 
@@ -1201,8 +1261,8 @@ def _reversal_line(r: dict) -> str:
     mk   = r.get("mk", {})
     bp   = r.get("boll_pct", 0.5)
 
-    # 综合星级（满分18，每3分一星，最多5星）
-    stars = "⭐" * min(pts // 3, 5)
+    # 综合星级（满分22，每4分一星，最多5星）
+    stars = "⭐" * min(pts // 4, 5)
 
     # 5维度得分条
     d_tech   = r.get("dim_tech",   0)
@@ -1210,12 +1270,14 @@ def _reversal_line(r: dict) -> str:
     d_fund   = r.get("dim_fund",   0)
     d_policy = r.get("dim_policy", 0)
     d_senti  = r.get("dim_senti",  0)
+    d_vol    = r.get("dim_vol",    0)
     radar = (
         f"{_dim_bar(d_tech,  6, '技术')}  "
         f"{_dim_bar(d_cycle, 4, '周期')}  "
         f"{_dim_bar(d_fund,  2, '资金')}  "
-        f"{_dim_bar(d_policy,4, '政策')}  "
-        f"{_dim_bar(d_senti, 2, '情绪')}"
+        f"{_dim_bar(d_policy,6, '政策')}  "
+        f"{_dim_bar(d_senti, 2, '情绪')}  "
+        f"{_dim_bar(d_vol,   2, '量价')}"
     )
 
     boll_line = (
@@ -1241,7 +1303,7 @@ def _reversal_line(r: dict) -> str:
 
     return (
         f"🔄 **{r['name']}**（{r['code']}）｜{info.get('signal_3d','—')} {info.get('theme','')}  "
-        f"{stars}  **{pts}/18分**\n"
+        f"{stars}  **{pts}/22分**\n"
         f"  {radar}\n"
         f"  价格 **{ind['close']:.2f}**  RSI={ind['rsi']:.0f}  量比={ind['vol_ratio']:.1f}x  主力{flow_str}\n"
         f"  {boll_line}\n"
@@ -1398,6 +1460,28 @@ def build_card(results: list[dict], regime: str, ts: str,
                 {"tag": "hr"},
             ]
 
+    # ── 板块恐慌 → 高低切换提示 ───────────────────────────────────────────
+    panic_clusters = (ctx or {}).get("panic_clusters", [])
+    offense_surge  = (ctx or {}).get("offense_surge", [])
+    if panic_clusters:
+        panic_text = fmt_cluster_panic_block(panic_clusters)
+        elements += [
+            {"tag": "div", "text": {"tag": "lark_md", "content": panic_text}},
+            {"tag": "hr"},
+        ]
+        defensive_list = fetch_and_score_defensive()
+        rotation_text  = _fmt_defensive_rotation(defensive_list, rotation=rotation)
+        elements += [
+            {"tag": "div", "text": {"tag": "lark_md", "content": rotation_text}},
+            {"tag": "hr"},
+        ]
+    elif offense_surge:
+        surge_text = fmt_offense_surge_block(offense_surge)
+        elements += [
+            {"tag": "div", "text": {"tag": "lark_md", "content": surge_text}},
+            {"tag": "hr"},
+        ]
+
     elements += [
         {"tag": "div", "text": {"tag": "lark_md", "content": gate_tip}},
         {"tag": "hr"},
@@ -1515,6 +1599,25 @@ def main(dry: bool = False, force: bool = False) -> None:
     all_klines = fetch_klines_parallel(stock_codes, count=300)
     ok_count = sum(1 for v in all_klines.values() if v is not None)
     log.info(f"K 线抓取完成：{ok_count}/{len(stock_codes)} 成功")
+
+    # 用 K 线最后两行计算今日涨跌幅，做集群恐慌检测（覆盖 fetch_macro_context 的 sector_snaps 结果）
+    try:
+        kline_chg_pcts: dict[str, float] = {}
+        for code, df in all_klines.items():
+            if df is not None and len(df) >= 2:
+                prev, cur = float(df["close"].iloc[-2]), float(df["close"].iloc[-1])
+                if prev > 0:
+                    kline_chg_pcts[code] = (cur - prev) / prev * 100
+        kline_panic = detect_cluster_panic(STOCK_UNIVERSE, kline_chg_pcts)
+        if kline_panic:
+            ctx["panic_clusters"] = kline_panic
+            log.info(f"板块恐慌: {', '.join(f'{n}({v:+.1f}%)' for n,v in kline_panic)}")
+        kline_surge = detect_offense_surge(STOCK_UNIVERSE, kline_chg_pcts)
+        if kline_surge:
+            ctx["offense_surge"] = kline_surge
+            log.info(f"进攻信号: {', '.join(f'{n}({v:+.1f}%)' for n,v in kline_surge)}")
+    except Exception as e:
+        log.debug(f"K线集群恐慌检测: {e}")
 
     results:   list[dict] = []
     reversals: list[dict] = []

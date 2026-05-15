@@ -25,6 +25,7 @@ import rotation_advisor
 import notifier
 import etf_reversal
 from data_health import check_data_health
+from tail_market_scanner import detect_cluster_panic, detect_offense_surge
 
 # ─── 日志配置 ─────────────────────────────────────────────────────────────────
 LOG_DIR = Path(__file__).parent / "logs"
@@ -138,17 +139,13 @@ def run() -> None:
         logger.warning("⚠️ 情绪过热：买入信号将自动降级，禁止追高！")
 
     # ── 2.6 攻守切换三维评判 ─────────────────────────────────────────────────
-    # 北向资金：优先精确净买入，降级为成交总额活跃度
+    # 北向资金：优先用接口直接返回的多周期合计（attrs），废额度后缓存累加不可靠
     north_5d_billion: float | None = None
     north_5d_deal_avg: float | None = None
     north_today_deal: float | None = None
     if north_flow is not None and len(north_flow) >= 1:
-        try:
-            net_series = north_flow["net_buy_billion"].dropna()
-            if len(net_series) >= 1:
-                north_5d_billion = round(float(net_series.tail(5).sum()), 2)
-        except Exception:
-            pass
+        # 优先用接口直接返回的5日合计
+        north_5d_billion = north_flow.attrs.get("net_buy_5d")
         try:
             deal_series = north_flow["deal_amt_billion"].dropna()
             if len(deal_series) >= 1:
@@ -247,6 +244,21 @@ def run() -> None:
 
     # ── 5. 飞书推送 ──────────────────────────────────────────────────────────
     logger.info("Step 5/5: 推送飞书...")
+
+    # 用 etf_prices K线末两行计算今日涨跌幅，检测集群恐慌
+    etf_chg_pcts: dict[str, float] = {}
+    for code, df in etf_prices.items():
+        if df is not None and len(df) >= 2:
+            prev, cur = float(df["close"].iloc[-2]), float(df["close"].iloc[-1])
+            if prev > 0:
+                etf_chg_pcts[code] = (cur - prev) / prev * 100
+    panic_clusters = detect_cluster_panic(ETF_UNIVERSE, etf_chg_pcts)
+    offense_surge  = detect_offense_surge(ETF_UNIVERSE, etf_chg_pcts)
+    if panic_clusters:
+        logger.info(f"板块恐慌: {', '.join(f'{n}({v:+.1f}%)' for n,v in panic_clusters)}")
+    if offense_surge:
+        logger.info(f"进攻信号: {', '.join(f'{n}({v:+.1f}%)' for n,v in offense_surge)}")
+
     success = notifier.send_signal(
         regime=regime,
         regime_score=regime_score,
@@ -258,6 +270,8 @@ def run() -> None:
         data_health=data_health,
         reversals=reversals,
         timing_risks=timing_risks,
+        panic_clusters=panic_clusters or None,
+        offense_surge=offense_surge or None,
     )
 
     if success:
