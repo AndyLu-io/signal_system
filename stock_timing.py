@@ -1409,20 +1409,40 @@ def build_card(results: list[dict], regime: str, ts: str,
         ]
 
     def _compact_sec(title: str, items: list[dict]) -> list[dict]:
-        """技术中性/弱势持观专用：每股一行，显示核心指标，比纯名称列表清晰。"""
+        """技术中性/弱势持观：每股一行，评分格栅+关键指标+趋势标，按评分降序。"""
         if not items:
             return []
+
+        def _mini_bar(s100: int) -> str:
+            """3格迷你评分条，均匀分段：<34=░░░ 34-50=█░░ 51-66=██░ 67+=███"""
+            if s100 >= 67:   return "███"
+            if s100 >= 51:   return "██░"
+            if s100 >= 34:   return "█░░"
+            return "░░░"
+
+        sorted_items = sorted(items, key=lambda r: r["score"], reverse=True)
         lines = []
-        for r in items:
-            ind      = r["ind"]
-            s100     = _score100(r["score"])
-            rsi      = ind.get("rsi", 50)
-            chg3     = ind.get("chg3", 0.0)
-            ma20_tag = "↑MA20" if ind.get("close", 0) > ind.get("ma20", 0) else "↓MA20"
+        for r in sorted_items:
+            ind    = r["ind"]
+            s100   = _score100(r["score"])
+            rsi    = ind.get("rsi", 50)
+            chg3   = ind.get("chg3", 0.0)
+            close  = ind.get("close", 0)
+            ma20   = ind.get("ma20", 0)
+            flow   = ind.get("main_force_flow", 0.0)
+
+            bar    = _mini_bar(s100)
+            ma20_pct = (close / ma20 - 1) * 100 if ma20 > 0 else 0
+            ma20_tag = f"↑MA20+{ma20_pct:.1f}%" if close >= ma20 else f"↓MA20{ma20_pct:.1f}%"
+            chg3_tag = f"▲{chg3:.1f}%" if chg3 >= 0 else f"▼{abs(chg3):.1f}%"
+            rsi_tag  = _rsi_tag(rsi)
+            flow_tag = (f" 主力{'↑' if flow > 0 else '↓'}{abs(flow):.1f}亿" if abs(flow) >= 0.3 else "")
+
             lines.append(
-                f"  {r['name']}({r['code']})  **{s100}/100**"
-                f"  RSI={rsi:.0f}  {ma20_tag}  3日{chg3:+.1f}%"
+                f"`{bar}` **{r['name']}**（{r['code']}）{s100}/100"
+                f"  {rsi_tag}  {ma20_tag}  {chg3_tag}{flow_tag}"
             )
+
         body = "\n".join(lines)
         return [
             {"tag": "div", "text": {"tag": "lark_md",
