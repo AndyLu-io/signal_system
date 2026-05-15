@@ -116,7 +116,11 @@ def _apply_timing_gate(
     """
     别人贪婪我恐惧——
     市场情绪过热或个股均线偏离过大时，降级/拦截买入信号。
-    连续大涨后谁来接盘？不做最后的接盘侠。
+
+    回测修正（2026-05）:
+    - 单独 DANGER（市场不热）: BUY降为BUY_WATCH，附警告即可（原降HOLD误杀率高，被拦后均涨+5.79%）
+    - 单独 market_hot（HOT）: 同降级而非完全拦截（被拦后仍正超额+1.32%）
+    - 双重 market_hot+DANGER: 仍降至 HOLD（真实高风险，卫星ETF连涨9日后确实回调）
     """
     if signal not in (SIGNAL_BUY_STRONG, SIGNAL_BUY_WATCH):
         return signal, note
@@ -127,29 +131,35 @@ def _apply_timing_gate(
     consec_up = etf_risk.get("consec_up", 0)
     ma5_dev = etf_risk.get("ma5_dev_pct", 0.0)
 
-    # 双重过热：市场情绪热 + 个股自身偏离大 → 直接降至观望
+    # 双重过热：市场情绪热 + 个股自身 DANGER → 降至观望（唯一真正拦截场景）
     if market_hot and risk_level == "DANGER":
         sentiment_level = getattr(sentiment, "level", "HOT")
         gate_note = (
-            f"择时拦截：市场{sentiment_level}+连涨{consec_up}日"
+            f"双重过热拦截：市场{sentiment_level}+连涨{consec_up}日"
             f"+距MA5偏离{ma5_dev:+.1f}%，等回落再介入"
         )
         return SIGNAL_HOLD, gate_note
 
-    # 市场情绪过热（单独）→ 强买降为观察，观察降为观望
+    # 市场情绪过热（单独）→ 强买降为观察，观察附警告保留
+    # 回测: HOT单独拦截后均收+1.67%仍正超额，完全拦截损失α
     if market_hot:
         sentiment_level = getattr(sentiment, "level", "HOT")
-        gate_note = f"市场情绪{sentiment_level}，信号降级，等待回落"
         if signal == SIGNAL_BUY_STRONG:
+            gate_note = f"市场{sentiment_level}，强买降为观察"
             return SIGNAL_BUY_WATCH, gate_note
-        return SIGNAL_HOLD, gate_note
+        # BUY_WATCH 仅附加警告，不降级
+        note = f"{note} ⚠️市场{sentiment_level}({consec_up}日涨)"
+        return signal, note
 
-    # 个股接盘风险高（市场未整体过热）→ 强买降级，附加警告
+    # 个股接盘风险高（市场未整体过热）→ 强买降为观察，附加警告
+    # 回测: 单独DANGER被拦后均涨+5.79%，不再降至HOLD
     if risk_level == "DANGER":
-        gate_note = f"连涨{consec_up}日+距MA5偏{ma5_dev:+.1f}%，追高风险，等待回踩MA"
+        gate_note = f"连涨{consec_up}日+距MA5偏{ma5_dev:+.1f}%，追高风险降为观察"
         if signal == SIGNAL_BUY_STRONG:
             return SIGNAL_BUY_WATCH, gate_note
-        return SIGNAL_HOLD, gate_note
+        # BUY_WATCH 附警告但保留
+        note = f"{note} ⚠️连涨{consec_up}日偏{ma5_dev:+.1f}%"
+        return signal, note
 
     if risk_level == "CAUTION":
         note = f"{note} ⚠️连涨{consec_up}日({ma5_dev:+.1f}%)"
@@ -161,15 +171,18 @@ def _apply_timing_gate(
 
 def _check_technical_entry(code: str,
                             etf_prices: dict[str, Optional[pd.DataFrame]]) -> bool:
-    """关三：价格在5日均线上方 + 成交量正常"""
+    """价格在5日均线合理区间 + 成交量不萎缩。
+    回测: tier=A 被 ma5 *1.02 拦截后仍涨+7.67%，放宽至+6% 减少误杀。
+    下轨保留 -3%（价格完全跌破才不买）。
+    """
     df = etf_prices.get(code)
     if df is None or len(df) < 6:
         return False
     closes = df["close"].values
     ma5 = closes[-5:].mean()
     current = closes[-1]
-    # 未大幅追高（不超过5日均线+2%）
-    if current > ma5 * 1.02:
+    # 放宽上轨：+6%（原+2%导致牛市行情永远买不进）
+    if current > ma5 * 1.06:
         return False
     if current < ma5 * 0.97:
         return False

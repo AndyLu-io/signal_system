@@ -349,6 +349,18 @@ STOCK_UNIVERSE = {
         "discovered": "2026Q1",
         "note": "光模块FPC封装，北向+2.03pp",
     },
+    "000988": {
+        "name": "华工科技",
+        "theme": "激光/光模块",
+        "pool": "core",      "cluster": "optics",
+        "f_policy": 85,      "f_earnings": 78,
+        "signal_3d": "★★★",
+        "fund_delta": 0,     "fund_pct": 0.0,
+        "nb_delta": 0.0,     "q1_yoy": 0,
+        "etf_overlap": ["159667", "515880"],
+        "discovered": "2026Q2",
+        "note": "激光装备+光模块(华工正源)；工业母机ETF权重17.1%居首，光模块800G放量",
+    },
 
     # ── 半导体设备/芯片 ──────────────────────────────────────────────────────
     "688012": {
@@ -386,6 +398,18 @@ STOCK_UNIVERSE = {
         "etf_overlap": ["512480", "159995", "561980", "588080"],
         "discovered": "2026Q1",
         "note": "AI推理芯片；Q1营收同比+276%，公募大增，北向减持-0.58pp；回测T+5超额+31.68%，上调f_earnings",
+    },
+    "002371": {
+        "name": "北方华创",
+        "theme": "半导体设备",
+        "pool": "core",      "cluster": "semicon",
+        "f_policy": 95,      "f_earnings": 86,
+        "signal_3d": "★★★",
+        "fund_delta": -41,   "fund_pct": -7.8,
+        "nb_delta": 0.0,     "q1_yoy": 0,
+        "etf_overlap": ["512480", "159995", "561980", "159909"],
+        "discovered": "2026Q2",
+        "note": "半导体设备龙头(刻蚀+PVD+CVD)；半导体设备ETF/芯片ETF双权重股，国产替代核心标的",
     },
 
     # ── 新能源（个股，与ETF池形成联动验证）────────────────────────────────────
