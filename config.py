@@ -48,6 +48,11 @@ FEISHU_INDEX_WEBHOOK = _env_webhook(
     "FEISHU_INDEX_WEBHOOK",
     "https://open.feishu.cn/open-apis/bot/v2/hook/2a6bbc1c-91cd-4cb6-963e-7b965999ea89",
 )
+# 前瞻指标专用频道
+FEISHU_FORWARD_WEBHOOKS = _env_webhooks(
+    "FEISHU_FORWARD_WEBHOOKS",
+    ["https://open.feishu.cn/open-apis/bot/v2/hook/31ea764e-2909-4c4b-b27f-6a6ee8b1bc26"],
+)
 
 
 # ─── 节假日黑名单（统一来源） ─────────────────────────────────────────────────

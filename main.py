@@ -26,6 +26,7 @@ import notifier
 import etf_reversal
 from data_health import check_data_health
 from tail_market_scanner import detect_cluster_panic, detect_offense_surge
+import forward_indicators
 
 # ─── 日志配置 ─────────────────────────────────────────────────────────────────
 LOG_DIR = Path(__file__).parent / "logs"
@@ -242,6 +243,16 @@ def run() -> None:
     reversals.sort(key=lambda r: -r["rev_pts"])
     logger.info(f"ETF底部反转候选共 {len(reversals)} 只")
 
+    # ── 4.6 前瞻指标 ────────────────────────────────────────────────────────
+    logger.info("Step 4.6/5: 计算前瞻指标...")
+    fwd = forward_indicators.calc_forward_indicators()
+    logger.info(
+        f"前瞻指标: {fwd.composite_score:.0f}/100 [{fwd.composite_label}] "
+        f"QVIX={fwd.qvix} 利差={fwd.yield_spread}bp 铜金比={fwd.copper_gold}"
+    )
+    fwd_ok = forward_indicators.send_forward_card(fwd, today_str)
+    logger.info(f"前瞻指标推送: {'✓' if fwd_ok else '✗'}")
+
     # ── 5. 飞书推送 ──────────────────────────────────────────────────────────
     logger.info("Step 5/5: 推送飞书...")
 
@@ -288,6 +299,18 @@ def run() -> None:
         "north_5d_billion": north_5d_billion,
         "data_health": data_health.to_dict(),
         "rotation_strength": rotation.strength,
+        "forward_indicators": {
+            "qvix": fwd.qvix,
+            "qvix_level": fwd.qvix_level,
+            "us10y": fwd.us10y,
+            "cn10y": fwd.cn10y,
+            "yield_spread": fwd.yield_spread,
+            "copper_gold": fwd.copper_gold,
+            "margin_balance": fwd.margin_balance,
+            "margin_5d_chg": fwd.margin_5d_chg,
+            "composite_score": fwd.composite_score,
+            "composite_label": fwd.composite_label,
+        },
         "sentiment": {
             "score": sentiment.score,
             "level": sentiment.level,
