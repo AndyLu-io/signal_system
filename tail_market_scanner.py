@@ -285,7 +285,9 @@ def _score_etf_tail(
     elif main_force_flow < -0.3:
         score -= 6;  cautions.append(f"主力今日净流出{abs(main_force_flow):.2f}亿，需观察")
 
-    stars = 3 if score >= 70 else (2 if score >= 50 else (1 if score >= 30 else 0))
+    # 回测(3月/148样本): 2★(sc50-59)胜率28~40% < 1★(sc30-48)胜率54~100%
+    # 2★门槛提至60使其与3★(70)保持真正意义的质量差异
+    stars = 3 if score >= 70 else (2 if score >= 60 else (1 if score >= 30 else 0))
 
     if not triggers and stars == 0:
         return None

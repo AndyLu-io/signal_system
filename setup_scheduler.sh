@@ -244,6 +244,46 @@ launchctl unload "$PLIST_INDEX" 2>/dev/null
 launchctl load "$PLIST_INDEX"
 echo "✅ 指数ETF择时任务已加载（09:25→14:50，每10分钟，约33次/天）"
 
+# ── 任务6：收盘后信号后验回测（16:00） ─────────────────────────────────────────
+LABEL_REVIEW="com.claudetrade.review"
+PLIST_REVIEW="$HOME/Library/LaunchAgents/${LABEL_REVIEW}.plist"
+
+cat > "$PLIST_REVIEW" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL_REVIEW}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${SCRIPT_DIR}/signal_review.py</string>
+        <string>--type</string>
+        <string>all</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>${SCRIPT_DIR}</string>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/launchd_review_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/launchd_review_stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
+EOF
+
+launchctl unload "$PLIST_REVIEW" 2>/dev/null
+launchctl load "$PLIST_REVIEW"
+echo "✅ 收盘后回测任务已加载（每日 16:00，--type all）"
+
 echo ""
 echo "定时任务状态："
 launchctl list | grep claudetrade
@@ -254,14 +294,17 @@ echo "  手动运行每小时指导：python3 ${SCRIPT_DIR}/daily_guidance.py"
 echo "  手动运行尾盘扫描：  python3 ${SCRIPT_DIR}/tail_main.py"
 echo "  手动运行个股择时：  python3 ${SCRIPT_DIR}/stock_timing.py"
 echo "  手动运行宽基择时：  python3 ${SCRIPT_DIR}/index_timing.py"
+echo "  手动运行回测：      python3 ${SCRIPT_DIR}/signal_review.py --type all"
 echo "  个股择时（仅打印）：python3 ${SCRIPT_DIR}/stock_timing.py --dry"
 echo "  查看开盘日志：      tail -f ${LOG_DIR}/signal_$(date +%Y%m).log"
 echo "  查看尾盘日志：      tail -f ${LOG_DIR}/tail_$(date +%Y%m).log"
 echo "  查看指导日志：      tail -f ${LOG_DIR}/launchd_guidance_stdout.log"
 echo "  查看个股日志：      tail -f ${LOG_DIR}/stock_timing_$(date +%Y%m).log"
 echo "  查看指数日志：      tail -f ${LOG_DIR}/launchd_index_stdout.log"
+echo "  查看回测日志：      tail -f ${LOG_DIR}/launchd_review_stdout.log"
 echo "  卸载开盘任务：      launchctl unload $PLIST_AM"
 echo "  卸载尾盘任务：      launchctl unload $PLIST_TAIL"
 echo "  卸载指导任务：      launchctl unload $PLIST_GUIDANCE"
 echo "  卸载个股任务：      launchctl unload $PLIST_STOCK"
 echo "  卸载指数任务：      launchctl unload $PLIST_INDEX"
+echo "  卸载回测任务：      launchctl unload $PLIST_REVIEW"

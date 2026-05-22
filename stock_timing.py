@@ -58,13 +58,38 @@ REGIME_STOCK_MAX = {"R1": 8, "R2": 6, "R3": 4, "R4": 0}
 # pool → 仓位系数
 POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
-SCORE_BUY_STRONG = 6   # 2026-05回测: score=5 BUY_STRONG T+5超额-1.07%, T+1胜率40%; 提至6需更强共振
-SCORE_BUY_WATCH  = 5   # 2026-05回测: score=4 BUY_WATCH T+5均收-2.12%超额-3.33%，提至5使其不再触发
-SCORE_HOLD       = -3  # 2026-05回测: SELL_STOP后T+5超额+3.34%，止损普遍过早；-3减少误降REDUCE
-SCORE_REDUCE     = -5  # 2026-05回测: REDUCE后均反弹+2.60%~+6.04%，放宽至-5降低误止损频率
+SCORE_BUY_STRONG = 6   # 3月29样本: ★★★/sc=5超额+2.67%胜率78%; sc=6非★★★超额-4~-6%（见过滤规则）
+SCORE_BUY_WATCH  = 5   # 3月83样本: BUY_WATCH超额+1.45%胜率59%; sc=4均收-2.12%超额-3.33%
+SCORE_HOLD       = -3  # 3月: SELL_STOP后T+5超额+3.34%，止损普遍过早；-3减少误降REDUCE
+SCORE_REDUCE     = -5  # 3月307样本: sc=-2超额+0.79%(偏弱), sc=-3超额-1.03%, sc=-4/-5强烈负超额
 
 # watch池高风险cluster，买入阈值提高+1（回测: chemical/food_bev/consumer T+5超额持续-2~-5%）
 _HIGH_RISK_CLUSTERS = frozenset({"chemical", "food_bev", "consumer"})
+
+# cluster → 代理ETF（sh/sz前缀），用于板块趋势判断
+# 规则：所在板块ETF的MA20斜率为负时，尾盘翻转信号不成立
+_CLUSTER_PROXY_ETF: dict[str, str] = {
+    "optics":          "sh515880",   # 通信ETF
+    "semicon":         "sh512480",   # 半导体ETF
+    "pcb":             "sh512480",   # 半导体ETF近似
+    "power_equip":     "sz159326",   # 电网设备ETF
+    "new_energy":      "sh516850",   # 新能源ETF
+    "battery":         "sh516850",
+    "battery_materials": "sh516850",
+    "industrial_auto": "sz562500",   # 机器人ETF
+    "defense":         "sz512660",   # 国防ETF
+    "chemical":        "sz159870",   # 化工ETF — 万华化学所在板块
+    "commodity":       "sh512400",   # 有色金属ETF
+    "consumer":        "sh515030",   # 消费ETF
+    "food_bev":        "sh515030",
+    "pharma":          "sh512010",   # 医疗ETF
+    "agriculture":     "sz159275",   # 农牧渔ETF — 牧原股份所在板块
+    "finance":         "sh515850",   # 证券ETF
+    "consumer_elec":   "sz159768",   # 消费电子ETF
+    "software":        "sz159522",   # 软件ETF
+    "machinery":       "sz562500",
+    "shipping":        "sh510170",   # 交运ETF近似
+}
 
 _TENCENT_HEADERS = {
     "User-Agent": (
@@ -535,7 +560,23 @@ def check_reversal(
     if _info_gate.get("f_earnings", 60) < 60:
         return None
 
-    # 低量提示（不作为硬门槛，改为评分维度扣分，万华化学量比0.53不应被直接淘汰）
+    # 周线趋势门槛：周线DIF在零轴以下且MACD柱不改善 → 大趋势仍空，拒绝反转
+    # 万华化学/牧原股份亏损案例：日线技术触底但周线仍在空头延续段
+    wk_gate = _weekly_macd_state(df)
+    if wk_gate["ok"]:
+        wk_dif_below = not wk_gate.get("above_zero", False)
+        wk_bar_bad   = not wk_gate.get("bar_rising", False) and not wk_gate.get("golden", False) and not wk_gate.get("pre_cross", False)
+        if wk_dif_below and wk_bar_bad:
+            return None   # 周线空头延续，日线反弹无效
+
+    # 板块趋势门槛：cluster代理ETF的MA20斜率持续为负 → 板块趋势向下，个股反转大概率失败
+    # 比亚迪（new_energy）、万华化学（chemical）、牧原股份（agriculture）均在下行板块中触发
+    _cluster = (_info_gate).get("cluster", "")
+    _cluster_trend = (ctx or {}).get("cluster_trend", {})
+    if _cluster and _cluster in _cluster_trend:
+        slope = _cluster_trend[_cluster]
+        if slope is not None and slope < -0.3:
+            return None   # 板块ETF MA20持续下行，逆势抄底胜率低
     vr = ind.get("vol_ratio", 0.5)
 
     pts      = 0
@@ -566,7 +607,14 @@ def check_reversal(
     if wk["ok"]:
         if wk.get("golden") or wk.get("pre_cross"):
             pts += 2; dim_cycle += 2
-            details.append("周线MACD" + ("金叉✅" if wk.get("golden") else "即将金叉🔔"))
+            # 区分零轴上方真金叉 vs 零轴下方弱金叉（DIF/DEA均负，仅相对位置改善）
+            if wk.get("golden") and wk.get("above_zero"):
+                lbl = "周线MACD金叉✅"
+            elif wk.get("golden"):
+                lbl = f"周线MACD弱金叉(DIF={wk['dif']:+.2f}仍在零轴下)"
+            else:
+                lbl = "周线MACD即将金叉🔔"
+            details.append(lbl)
         elif wk.get("above_zero"):
             pts += 1; dim_cycle += 1; details.append("周线DIF零轴以上")
         elif wk.get("bar_rising"):
@@ -921,11 +969,16 @@ def _price_snapshots_batch(syms: list[str], count: int = 65) -> dict[str, dict]:
                 chg = round((close / prev - 1) * 100, 2)
                 ma5 = sum(closes[-5:]) / 5
                 ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else close
+                ma20_slope: float | None = None
+                if len(closes) >= 25:
+                    ma20_prev = sum(closes[-25:-5]) / 20
+                    ma20_slope = round((ma20 - ma20_prev) / ma20_prev * 100, 3) if ma20_prev > 0 else None
                 return sym, {
-                    "close":   close,
-                    "chg_pct": chg,
-                    "vs_ma5":  "↑" if close > ma5 else "↓",
-                    "vs_ma20": "↑" if close > ma20 else "↓",
+                    "close":      close,
+                    "chg_pct":    chg,
+                    "vs_ma5":     "↑" if close > ma5 else "↓",
+                    "vs_ma20":    "↑" if close > ma20 else "↓",
+                    "ma20_slope": ma20_slope,   # 5日MA20斜率(%)，正=上行，负=下行
                 }
             except Exception:
                 if attempt == 0:
@@ -1039,6 +1092,18 @@ def fetch_macro_context() -> dict:
             ctx["panic_clusters"] = panic_clusters
     except Exception as e:
         log.debug(f"集群恐慌检测: {e}")
+
+    # ── 7. 板块趋势（cluster代理ETF的MA20斜率，用于尾盘翻转过滤） ────────────
+    try:
+        proxy_syms = list(set(_CLUSTER_PROXY_ETF.values()))
+        proxy_raw  = _price_snapshots_batch(proxy_syms, count=30)
+        cluster_trend: dict[str, float | None] = {}
+        for cluster, sym in _CLUSTER_PROXY_ETF.items():
+            snap = proxy_raw.get(sym)
+            cluster_trend[cluster] = snap.get("ma20_slope") if snap else None
+        ctx["cluster_trend"] = cluster_trend
+    except Exception as e:
+        log.debug(f"板块趋势获取失败: {e}")
 
     return ctx
 
@@ -1687,6 +1752,13 @@ def main(dry: bool = False, force: bool = False) -> None:
             sig = "HOLD"
             reasons.append("单维共振(★☆☆)，等待信号强化")
 
+        # BUY_STRONG score=6 且非★★★ → 降为BUY_WATCH
+        # 回测(3月/29样本): ★★★/sc=6 T+5超额-4.61%胜率0%，★★☆/sc=6超额-6.09%
+        # score=6往往对应单日强共振但缺乏持续性，非★★★时易高位假突破
+        if sig == "BUY_STRONG" and score == SCORE_BUY_STRONG and info.get("signal_3d") != "★★★":
+            sig = "BUY_WATCH"
+            reasons.append(f"score={score}仅单日强共振非三维共振(★★★)，降为观察买")
+
         # ★★★ core BUY追高过滤：偏离MA20>=8%时降级为HOLD观察
         # 回测: ★★★ core BUY_WATCH T+1胜率仅29.6%，追高是核心原因
         if sig in ("BUY_STRONG", "BUY_WATCH") and pool == "core" and info.get("signal_3d") == "★★★":
@@ -1714,9 +1786,11 @@ def main(dry: bool = False, force: bool = False) -> None:
             if pool == "watch":
                 sig = "REDUCE"
                 reasons.append("观察池暂缓止损，降为减仓（watch池止损成本高）")
-            elif pool == "core" and info.get("signal_3d") == "★★★" and score >= -5:
+            elif pool == "core" and info.get("signal_3d") == "★★★":
+                # 3月29样本: ★★★/core sc=-4超额+5.06%, sc=-5超额+4.75%, sc=-6超额+7.66%
+                # ★★★核心池全档位SELL_STOP均为卖飞，取消score门槛限制
                 sig = "REDUCE"
-                reasons.append("★★★核心池score>=-5暂缓止损，降为减仓观察")
+                reasons.append("★★★核心池暂缓止损（各分数档回测均为卖飞），降为减仓观察")
             elif rsi_now < 25:
                 sig = "REDUCE"
                 reasons.append(f"RSI深度超卖({rsi_now:.0f}<25)，暂缓止损降为减仓")
