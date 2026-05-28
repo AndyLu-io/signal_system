@@ -225,6 +225,14 @@
       "market_value": 677103.0,
       "position_count": 5,
       "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
     }
   ],
   "trades": [
@@ -280,5 +288,5 @@
     }
   ],
   "created_at": "2026-05-28",
-  "last_update": "2026-05-28T22:38:50"
+  "last_update": "2026-05-28T23:29:42"
 }

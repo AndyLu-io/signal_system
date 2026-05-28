@@ -1,0 +1,62 @@
+{
+  "date": "2026-05-28",
+  "signals": [
+    {
+      "code": "515880",
+      "name": "通信设备",
+      "signal": "BUY_WATCH",
+      "weight_pct": 15.0,
+      "stop_loss_pct": 5.0,
+      "composite": 70,
+      "note": "周资金大幅流入146亿；短线涨幅已大，追高风险",
+      "source": "weekly_report",
+      "style": "中线配置",
+      "hold_period": "4-8周（中线配置）",
+      "stop_condition": "跌破20日均线清仓",
+      "generated_date": "2026-05-28"
+    },
+    {
+      "code": "512480",
+      "name": "半导体",
+      "signal": "BUY_WATCH",
+      "weight_pct": 15.0,
+      "stop_loss_pct": 5.0,
+      "composite": 80,
+      "note": "周资金大幅流入94亿；资金偏离度高",
+      "source": "weekly_report",
+      "style": "中线配置",
+      "hold_period": "4-8周（中线配置）",
+      "stop_condition": "跌破20日均线清仓",
+      "generated_date": "2026-05-28"
+    },
+    {
+      "code": "159732",
+      "name": "消费电子",
+      "signal": "BUY_WATCH",
+      "weight_pct": 15.0,
+      "stop_loss_pct": 5.0,
+      "composite": 80,
+      "note": "周资金大幅流入79亿；资金偏离度高",
+      "source": "weekly_report",
+      "style": "中线配置",
+      "hold_period": "4-8周（中线配置）",
+      "stop_condition": "跌破20日均线清仓",
+      "generated_date": "2026-05-28"
+    },
+    {
+      "code": "512400",
+      "name": "小金属",
+      "signal": "BUY_WATCH",
+      "weight_pct": 5.0,
+      "stop_loss_pct": 5.0,
+      "composite": 40,
+      "note": "周资金流入45亿；连续多周主线（趋势确认）",
+      "source": "weekly_report",
+      "style": "中线配置",
+      "hold_period": "持有至趋势破坏",
+      "stop_condition": "跌破20日均线清仓",
+      "generated_date": "2026-05-28"
+    }
+  ],
+  "expires": "2026-06-04"
+}

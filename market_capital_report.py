@@ -623,7 +623,47 @@ def generate_report() -> dict:
     log_path = _LOGS_DIR / f"market_capital_{date.today().isoformat()}.json"
     atomic_write_json(log_path, report)
 
+    # 周报 → 模拟盘联动：写入 market_signals.json 供下周一执行
+    _write_market_signals(action_plan)
+
     return report
+
+
+def _write_market_signals(action_plan: list[dict]) -> None:
+    """将周报建议转为模拟盘可消费的信号文件。"""
+    signals = []
+    for rec in action_plan:
+        etf_str = rec.get("etf", "")
+        code = etf_str.split(" ")[0] if etf_str else ""
+        if not code or code == "—":
+            continue
+
+        weight_str = rec.get("weight", "10-15%")
+        weight = float(weight_str.split("-")[0]) if "-" in weight_str else 10.0
+
+        signals.append({
+            "code": code,
+            "name": rec["name"],
+            "signal": "BUY_WATCH",
+            "weight_pct": weight,
+            "stop_loss_pct": 5.0,
+            "composite": rec.get("score", 50) * 10,
+            "note": "；".join(rec.get("reasons", [])[:2]),
+            "source": "weekly_report",
+            "style": rec.get("style", "中线配置"),
+            "hold_period": rec.get("hold_period", "1-2周"),
+            "stop_condition": rec.get("stop_condition", ""),
+            "generated_date": date.today().isoformat(),
+        })
+
+    signal_file = _STATE_DIR / "market_signals.json"
+    atomic_write_json(signal_file, {
+        "date": date.today().isoformat(),
+        "signals": signals,
+        "expires": (date.today() + timedelta(days=7)).isoformat(),
+    })
+    logger.info(f"周报信号已写入 market_signals.json ({len(signals)}条)")
+
 
 
 # ─── 飞书卡片（3张） ──────────────────────────────────────────────────────────

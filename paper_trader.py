@@ -454,8 +454,23 @@ def load_signals_for_account(account: str, today: str, session: str = "all") -> 
     signals = []
 
     if account == "etf":
-        # 早盘: ETF主信号（08:30生成）
+        # 早盘: 先加载周报推荐信号（周五生成→下周一执行）
         if session in ("morning", "all"):
+            market_sig_file = _STATE_DIR / "market_signals.json"
+            if market_sig_file.exists():
+                try:
+                    ms = json.loads(market_sig_file.read_text(encoding="utf-8"))
+                    expires = ms.get("expires", "")
+                    if today <= expires:
+                        for sig in ms.get("signals", []):
+                            sig["composite"] = sig.get("composite", 70)
+                            signals.append(sig)
+                        if ms.get("signals"):
+                            logger.info(f"[ETF] 加载周报信号 {len(ms['signals'])}条 (有效至{expires})")
+                except Exception as e:
+                    logger.warning(f"读取 market_signals.json 失败: {e}")
+
+            # ETF主信号（08:30生成）
             f1 = _LOGS_DIR / f"signal_detail_{date_compact}.json"
             if f1.exists():
                 data = json.loads(f1.read_text(encoding="utf-8"))
