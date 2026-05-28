@@ -232,6 +232,7 @@ SECTOR_ETF_QUICK = {
 def _check_anomaly_alert(industry_data: list[dict], today: date) -> None:
     """单日异常资金流入告警。"""
     from feishu_pusher import post_card
+    from utils import webhooks_from_env
 
     alerts = [s for s in industry_data if s.get("net", 0) > ANOMALY_THRESHOLD]
     if not alerts:
