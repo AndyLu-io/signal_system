@@ -60,8 +60,8 @@ POOL_FACTOR = {"core": 1.0, "candidate": 0.6, "watch": 0.0}
 
 SCORE_BUY_STRONG = 6   # 3月29样本: ★★★/sc=5超额+2.67%胜率78%; sc=6非★★★超额-4~-6%（见过滤规则）
 SCORE_BUY_WATCH  = 5   # 3月83样本: BUY_WATCH超额+1.45%胜率59%; sc=4均收-2.12%超额-3.33%
-SCORE_HOLD       = -3  # 3月: SELL_STOP后T+5超额+3.34%，止损普遍过早；-3减少误降REDUCE
-SCORE_REDUCE     = -5  # 3月307样本: sc=-2超额+0.79%(偏弱), sc=-3超额-1.03%, sc=-4/-5强烈负超额
+SCORE_HOLD       = -2  # 全年回测: sc=-2超额+2.69%胜率63%, sc=-3超额-0.47%均为误减仓
+SCORE_REDUCE     = -4  # 全年回测: sc=-4超额-4.36%胜率11%, sc=-5/-6强烈负超额
 
 # watch池高风险cluster，买入阈值提高+1（回测: chemical/food_bev/consumer T+5超额持续-2~-5%）
 _HIGH_RISK_CLUSTERS = frozenset({"chemical", "food_bev", "consumer"})
@@ -416,6 +416,17 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
     elif dev_ma20 >= 12:
         score -= 1; reasons.append(f"偏离MA20+{dev_ma20:.0f}%")
 
+    # 连涨天数惩罚（回测5月: BUY_STRONG 15样本全部处于连涨+多头排列，T+5均收-0.73%）
+    consec_up = ind.get("consec_up_days", 0)
+    if consec_up >= 5:
+        score -= 2; reasons.append(f"连涨{consec_up}日追高风险极高")
+    elif consec_up >= 3 and close > ma5 * 1.04:
+        score -= 1; reasons.append(f"连涨{consec_up}日+偏离MA5({(close/ma5-1)*100:.1f}%)")
+
+    # RSI+连涨联合惩罚（回测: BUY_STRONG追高样本RSI均68-76）
+    if rsi > 65 and consec_up >= 3:
+        score -= 1; reasons.append(f"RSI{rsi:.0f}+连涨{consec_up}日，动量衰减风险")
+
     return score, reasons
 
 
@@ -704,8 +715,19 @@ def calc_position(sig: str, info: dict, regime: str) -> int:
     return max(0, round(base))
 
 
-def calc_stop(ind: dict) -> float:
-    return round(max(ind["ma20"], ind["close"] * 0.95), 2)
+# cluster → 止损乘数（回测5月: 50样本SELL_STOP后T+5均+2.81%，止损偏紧）
+_CLUSTER_STOP_MULT: dict[str, float] = {
+    "semicon": 0.93, "optics": 0.93, "defense": 0.93,
+    "pcb": 0.93, "industrial_auto": 0.93, "new_energy": 0.93,
+    "battery": 0.94, "commodity": 0.94, "machinery": 0.94,
+    "consumer": 0.96, "food_bev": 0.96, "finance": 0.96,
+}
+
+
+def calc_stop(ind: dict, info: dict | None = None) -> float:
+    cluster = (info or {}).get("cluster", "")
+    mult = _CLUSTER_STOP_MULT.get(cluster, 0.95)
+    return round(max(ind["ma20"], ind["close"] * mult), 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1229,16 +1251,17 @@ def _rsi_tag(rsi: float) -> str:
 
 
 def _suggest_entry(ind: dict, sig: str) -> tuple[float, str]:
-    """返回 (建议买入参考价, 简短提示)。"""
+    """返回 (建议买入参考价, 简短提示)。回测:BUY后T+1均亏-2.17%，分批建仓减少冲击。"""
     close, ma5, ma20 = ind["close"], ind["ma5"], ind["ma20"]
+    entry2 = round(min(close * 0.985, ma5 * 1.005), 2)
     if sig == "BUY_STRONG":
         if close > ma5 * 1.03:
-            return round(ma5 * 1.01, 2), "等回踩MA5再分批入场"
-        return round(close, 2), "当前价位可即刻分批建仓"
+            return round(ma5 * 1.01, 2), f"⚡首仓50%≤{round(ma5*1.01,2)} + 补仓50%≤{entry2}"
+        return round(close, 2), f"⚡首仓50%现价 + 次日回调至{entry2}补仓50%"
     # BUY_WATCH
     if close > ma5 * 1.02:
-        return round(ma5 * 1.01, 2), "建议等回踩MA5附近再入场"
-    return round(close, 2), "当前价位可小仓试探建仓"
+        return round(ma5 * 1.01, 2), f"首仓50%≤{round(ma5*1.01,2)} + 次日补仓50%≤{entry2}"
+    return round(close, 2), f"首仓50%现价 + 次日回调至{entry2}补仓50%"
 
 
 def _score100(score: int) -> int:
@@ -1956,6 +1979,13 @@ def main(dry: bool = False, force: bool = False) -> None:
                 sig = "HOLD"
                 reasons.append(f"高风险板块({cluster_now})，买入阈值+1，等待更强信号")
 
+        # MA60陡峭上行+RSI高位 = 动量衰竭区（回测: 德业+源杰+罗博特科等MA60>3.5%+RSI>68均大亏-11~-27%）
+        ma60_slope = ind.get("ma60_slope_5d", 0.0)
+        rsi_now = ind.get("rsi", 50)
+        if sig in ("BUY_STRONG", "BUY_WATCH") and ma60_slope > 3.5 and rsi_now > 68:
+            sig = "HOLD"
+            reasons.append(f"MA60陡峭+{ma60_slope:.1f}%且RSI={rsi_now:.0f}，动量衰竭区不追高")
+
         # ── 减仓/止损过滤 ──────────────────────────────────────────────────
         # SELL_STOP 降级规则（回测: SELL_STOP后T+5超额+3.34%，大量误杀）
         rsi_now = ind.get("rsi", 50)
@@ -1977,9 +2007,16 @@ def main(dry: bool = False, force: bool = False) -> None:
             elif consec < 4:
                 sig = "REDUCE"
                 reasons.append(f"MA60跌破{consec}日未满4日确认，降级为减仓")
+            # 止损延迟确认：近3日均价仍在止损价上方 → 假破位，降级观察
+            elif len(df) >= 4:
+                recent_3d_avg = df["close"].values[-3:].mean()
+                stop_ref = ind["close"] * _CLUSTER_STOP_MULT.get(cluster_now, 0.95)
+                if recent_3d_avg > stop_ref:
+                    sig = "REDUCE"
+                    reasons.append(f"3日均价{recent_3d_avg:.2f}仍高于止损{stop_ref:.2f}，疑似假破位")
 
         pos  = calc_position(sig, info, regime)
-        stop = calc_stop(ind)
+        stop = calc_stop(ind, info)
 
         results.append({
             "code":         code,
@@ -2105,7 +2142,7 @@ def main(dry: bool = False, force: bool = False) -> None:
     snap.write_text(
         json.dumps(
             [
-                {k: v for k, v in r.items() if k not in ("ind", "info")}
+                {k: v for k, v in r.items() if k not in ("ind", "info", "df")}
                 | {"close": r["ind"]["close"], "rsi": r["ind"]["rsi"],
                    "vol_ratio": r["ind"]["vol_ratio"], "data_date": r["ind"]["data_date"],
                    "consec_below_ma60": r["ind"]["consec_below_ma60"],

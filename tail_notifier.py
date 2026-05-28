@@ -44,7 +44,10 @@ def _format_signal(s) -> str:
     main_sig  = getattr(s, "main_signal", "")
     if composite > 0:
         if main_sig == "AVOID":
-            main_warn = f"\n    🚨 **主流程综合评分{composite:.0f}（{main_tier}级），今日标记为不推荐配置，技术面买点需谨慎**"
+            if main_tier == "D" or composite < 40:
+                main_warn = f"\n    🚨 **{main_tier}级/{composite:.0f}分，不建议配置**"
+            else:
+                main_warn = f"\n    ℹ️ {main_tier}级/{composite:.0f}分(AVOID)，回测尾盘低吸仍正收益，可小仓"
         elif main_sig in ("REDUCE",) or (main_tier in ("C", "D") and composite < 50):
             main_warn = f"\n    ⚠️ **主流程评分偏低{composite:.0f}（{main_tier}级），基本面支撑不足，尾盘低吸需控制仓位**"
         elif composite < 55 and main_tier not in ("S", "A"):

@@ -343,12 +343,17 @@ def enrich_returns(
             rec.close_t = t_data["close"]
         else:
             t_data = code_prices.get(rec.signal_date) or {"close": rec.close_t, "high": rec.close_t, "low": rec.close_t}
-            # 交叉验证：若缓存价与信号记录价差距超3倍，视为缓存数据错误
             cached_close = t_data.get("close") or rec.close_t
-            if rec.close_t > 0 and (cached_close / rec.close_t > 3 or cached_close / rec.close_t < 0.33):
-                logger.warning(f"价格不一致 {rec.code} {rec.signal_date}: 信号记录={rec.close_t:.2f} 缓存={cached_close:.2f}，标记 missing_price")
-                rec.review_status = "missing_price"
-                continue
+            if rec.close_t > 0 and cached_close > 0:
+                ratio = cached_close / rec.close_t
+                if ratio > 3 or ratio < 0.33:
+                    logger.warning(f"价格不一致 {rec.code} {rec.signal_date}: 信号记录={rec.close_t:.2f} 缓存={cached_close:.2f}，标记 missing_price")
+                    rec.review_status = "missing_price"
+                    continue
+                # 除权修正：偏差>20%时用前复权缓存价作为基准（避免未复权vs前复权导致假暴跌）
+                if ratio < 0.8 or ratio > 1.2:
+                    logger.info(f"除权修正 {rec.code} {rec.signal_date}: 信号价{rec.close_t:.2f}→缓存价{cached_close:.2f}")
+                    rec.close_t = cached_close
 
         base = rec.close_t
         if base is None or base <= 0:

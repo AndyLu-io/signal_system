@@ -25,20 +25,26 @@ from feishu_pusher import post_card
 # ─── 配置 ──────────────────────────────────────────────────────────────────────
 
 INDEX_UNIVERSE: dict[str, dict] = {
-    # ── A股宽基 ─────────────────────────────────────────────────
-    "510300": {"name": "沪深300",    "region": "A股", "risk": "中"},
-    "510330": {"name": "沪深300华夏","region": "A股", "risk": "中"},
-    "510500": {"name": "中证500",    "region": "A股", "risk": "中高"},
+    # ── A股宽基（大→中→小→微，全市值覆盖）─────────────────────
     "510050": {"name": "上证50",     "region": "A股", "risk": "低"},
+    "563080": {"name": "中证A50",    "region": "A股", "risk": "中"},
+    "510300": {"name": "沪深300",    "region": "A股", "risk": "中"},
+    "510500": {"name": "中证500",    "region": "A股", "risk": "中高"},
+    "512100": {"name": "中证1000",   "region": "A股", "risk": "高"},
     "159915": {"name": "创业板",     "region": "A股", "risk": "高"},
     "588080": {"name": "科创50",     "region": "A股", "risk": "高"},
     "159902": {"name": "中小100",    "region": "A股", "risk": "中高"},
-    "563080": {"name": "中证A50",    "region": "A股", "risk": "中"},
-    # ── 海外 ────────────────────────────────────────────────────
+    # ── 港股 ────────────────────────────────────────────────────
+    "159920": {"name": "恒生指数",   "region": "港股", "risk": "中"},
     "513180": {"name": "恒生科技",   "region": "港股", "risk": "高"},
-    "513520": {"name": "日经225",    "region": "日股", "risk": "中高"},
+    # ── 美股 ────────────────────────────────────────────────────
+    "513500": {"name": "标普500",    "region": "美股", "risk": "中"},
     "513400": {"name": "道琼斯",     "region": "美股", "risk": "中"},
     "159501": {"name": "纳斯达克",   "region": "美股", "risk": "高"},
+    # ── 日股 ────────────────────────────────────────────────────
+    "513520": {"name": "日经225",    "region": "日股", "risk": "中高"},
+    # ── 商品（对冲参考）────────────────────────────────────────────
+    "518880": {"name": "黄金",       "region": "商品", "risk": "中"},
 }
 
 # CSI300 基准代码（用于超额收益计算）
@@ -711,7 +717,9 @@ def _etf_reversal_line(timing: "IndexTiming", rev: dict) -> str:
 
 
 def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time: str,
-               reversals: list[dict] | None = None) -> dict:
+               reversals: list[dict] | None = None,
+               pullbacks: list[IndexPullback] | None = None,
+               trend_adds: list[IndexTrendAdd] | None = None) -> dict:
     regime_label = REGIME_LABEL.get(regime, regime)
     color = REGIME_COLOR.get(regime, "blue")
 
@@ -817,6 +825,11 @@ def build_card(timings: list[IndexTiming], run_date: str, regime: str, run_time:
             },
         ]
 
+    # ── 回踩低吸 + 趋势加仓 ─────────────────────────────────────
+    pb_elements = _build_pullback_section(pullbacks or [], trend_adds or [])
+    if pb_elements:
+        card["card"]["elements"] += pb_elements
+
     card["card"]["elements"].append({
         "tag": "note",
         "elements": [
@@ -834,6 +847,190 @@ def send_to_feishu(card: dict, webhook: str = FEISHU_WEBHOOK) -> bool:
 
 
 # ─── 主流程 ────────────────────────────────────────────────────────────────────
+
+# ─── 指数回踩低吸 + 趋势加仓 ──────────────────────────────────────────────────
+
+@dataclass
+class IndexPullback:
+    code: str
+    name: str
+    close: float
+    ma20: float
+    ma20_dev_pct: float
+    pullback_pct: float       # 从10日高点回撤
+    rsi14: float
+    ma60_slope: float         # MA60斜率(%)
+    vol_shrink: float         # 量能萎缩比
+    entry_price: float        # 建议分批入场价
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class IndexTrendAdd:
+    code: str
+    name: str
+    close: float
+    breakout_pct: float       # 突破20日高点幅度
+    vol_ratio: float          # 量比
+    weekly_up: bool           # 周线趋势向上
+    reasons: list[str] = field(default_factory=list)
+
+
+def scan_index_pullbacks(etf_dfs: dict, timings: list[IndexTiming]) -> list[IndexPullback]:
+    """
+    扫描指数ETF回踩低吸窗口。
+    条件：MA60上行 + 回踩MA20附近(-3%~+1%) + RSI 30-50 + 近3日量能萎缩
+    """
+    results: list[IndexPullback] = []
+    for t in timings:
+        df = etf_dfs.get(t.code)
+        if df is None or len(df) < 65:
+            continue
+
+        closes = df["close"].values.astype(float)
+        current = closes[-1]
+        ma20 = closes[-20:].mean()
+        ma60 = closes[-60:].mean()
+
+        # MA60 必须上行
+        if len(closes) >= 65:
+            ma60_prev = closes[-65:-5].mean()
+            ma60_slope = (ma60 - ma60_prev) / ma60_prev * 100
+        else:
+            continue
+        if ma60_slope < 0.1:
+            continue
+
+        # 回踩MA20: 偏离在 -3% ~ +1.5%
+        ma20_dev = (current - ma20) / ma20 * 100
+        if ma20_dev < -3.5 or ma20_dev > 1.5:
+            continue
+
+        # 10日高点回撤 >= 2.5%
+        high_10d = closes[-10:].max()
+        pullback = (high_10d - current) / high_10d * 100
+        if pullback < 2.5:
+            continue
+
+        # RSI 30-52
+        rsi14 = _calc_rsi(closes)
+        if rsi14 < 28 or rsi14 > 52:
+            continue
+
+        # 量能萎缩
+        vol_shrink = 1.0
+        if "amount" in df.columns and len(df) >= 22:
+            amounts = df["amount"].values.astype(float)
+            vol_3d = amounts[-3:].mean()
+            vol_20d = amounts[-20:-3].mean()
+            vol_shrink = vol_3d / vol_20d if vol_20d > 0 else 1.0
+
+        if vol_shrink > 1.2:
+            continue
+
+        reasons = []
+        reasons.append(f"MA60上行+{ma60_slope:.1f}%（中期趋势完好）")
+        reasons.append(f"回踩MA20({ma20_dev:+.1f}%)")
+        reasons.append(f"10日回撤{pullback:.1f}%")
+        reasons.append(f"RSI={rsi14:.0f}")
+        if vol_shrink <= 0.7:
+            reasons.append(f"缩量{vol_shrink:.1f}x（抛压衰竭）")
+
+        # 分批入场价：MA20附近
+        entry = round(min(current * 0.99, ma20 * 1.005), 3)
+
+        results.append(IndexPullback(
+            code=t.code, name=t.name, close=round(current, 3),
+            ma20=round(ma20, 3), ma20_dev_pct=round(ma20_dev, 2),
+            pullback_pct=round(pullback, 2), rsi14=round(rsi14, 1),
+            ma60_slope=round(ma60_slope, 2), vol_shrink=round(vol_shrink, 2),
+            entry_price=entry, reasons=reasons,
+        ))
+
+    results.sort(key=lambda s: -s.pullback_pct)
+    return results
+
+
+def scan_index_trend_add(etf_dfs: dict, timings: list[IndexTiming]) -> list[IndexTrendAdd]:
+    """
+    扫描指数趋势加仓信号：突破20日高点 + 放量。
+    """
+    results: list[IndexTrendAdd] = []
+    for t in timings:
+        df = etf_dfs.get(t.code)
+        if df is None or len(df) < 25:
+            continue
+
+        closes = df["close"].values.astype(float)
+        current = closes[-1]
+        high_20d = closes[-21:-1].max()
+
+        if current <= high_20d:
+            continue
+
+        breakout = (current / high_20d - 1) * 100
+
+        vol_ratio = 1.0
+        if "amount" in df.columns and len(df) >= 6:
+            amounts = df["amount"].values.astype(float)
+            vol_ratio = amounts[-1] / amounts[-6:-1].mean() if amounts[-6:-1].mean() > 0 else 1.0
+
+        if vol_ratio < 1.2:
+            continue
+
+        # 周线趋势向上
+        weekly_up = False
+        if len(closes) >= 30:
+            w5 = closes[-5:].mean()
+            w10 = closes[-10:].mean()
+            weekly_up = w5 > w10
+
+        reasons = []
+        reasons.append(f"突破20日高点+{breakout:.1f}%")
+        reasons.append(f"量比{vol_ratio:.1f}x")
+        if weekly_up:
+            reasons.append("周趋势向上")
+
+        results.append(IndexTrendAdd(
+            code=t.code, name=t.name, close=round(current, 3),
+            breakout_pct=round(breakout, 2), vol_ratio=round(vol_ratio, 2),
+            weekly_up=weekly_up, reasons=reasons,
+        ))
+
+    results.sort(key=lambda s: -s.breakout_pct)
+    return results
+
+
+def _build_pullback_section(pullbacks: list[IndexPullback], trend_adds: list[IndexTrendAdd]) -> list[dict]:
+    """构建回踩+趋势加仓的飞书卡片 elements。"""
+    elements = []
+    if pullbacks:
+        lines = ["**📉 指数回踩低吸窗口**\n"]
+        for p in pullbacks[:6]:
+            lines.append(
+                f"🌟 **{p.name}**({p.code}) "
+                f"回撤{p.pullback_pct:.1f}% MA20偏{p.ma20_dev_pct:+.1f}% "
+                f"RSI={p.rsi14:.0f} 量{p.vol_shrink:.1f}x"
+            )
+            lines.append(f"  └ {'; '.join(p.reasons)}")
+            lines.append(f"  └ 建议入场: ⚡首仓50%现价 + 回调至**{p.entry_price}**补50%")
+        elements.append({"tag": "markdown", "content": "\n".join(lines)})
+        elements.append({"tag": "hr"})
+
+    if trend_adds:
+        lines = ["**📈 指数趋势加仓**\n"]
+        for ta in trend_adds[:6]:
+            wk = "✅周线↑" if ta.weekly_up else ""
+            lines.append(
+                f"🔥 **{ta.name}**({ta.code}) "
+                f"突破+{ta.breakout_pct:.1f}% 量{ta.vol_ratio:.1f}x {wk}"
+            )
+            lines.append(f"  └ {'; '.join(ta.reasons)}")
+        elements.append({"tag": "markdown", "content": "\n".join(lines)})
+        elements.append({"tag": "hr"})
+
+    return elements
+
 
 def run() -> None:
     now      = datetime.today()
@@ -875,9 +1072,9 @@ def run() -> None:
     timings:   list[IndexTiming] = []
     reversals: list[dict] = []
     for code, info in INDEX_UNIVERSE.items():
-        # 海外ETF宏观资金用50中性基准（北向/两融/宽度不适用）
+        # 海外/商品ETF宏观资金用50中性基准（北向/两融/宽度不适用）
         m_score  = macro_score if info["region"] == "A股" else 50.0
-        m_label  = macro_label if info["region"] == "A股" else "中性基准(海外)"
+        m_label  = macro_label if info["region"] == "A股" else "中性基准(非A股)"
 
         # 海外ETF超额收益基准为自身（无需CSI300对比）
         benchmark = csi300_closes if info["region"] == "A股" else None
@@ -914,8 +1111,15 @@ def run() -> None:
     reversals.sort(key=lambda r: -r["rev"]["rev_pts"])
     logger.info(f"ETF底部反转候选: {len(reversals)} 只 — {[r['timing'].name for r in reversals]}")
 
+    # ── 回踩低吸 + 趋势加仓扫描 ─────────────────────────────────
+    pullbacks = scan_index_pullbacks(etf_dfs, timings)
+    trend_adds = scan_index_trend_add(etf_dfs, timings)
+    logger.info(f"指数回踩低吸: {len(pullbacks)} 只 — {[p.name for p in pullbacks]}")
+    logger.info(f"指数趋势加仓: {len(trend_adds)} 只 — {[t.name for t in trend_adds]}")
+
     # ── 推送飞书 ─────────────────────────────────────────────────
-    card = build_card(timings, today_str, regime, time_str, reversals=reversals)
+    card = build_card(timings, today_str, regime, time_str, reversals=reversals,
+                      pullbacks=pullbacks, trend_adds=trend_adds)
     send_to_feishu(card)
 
     # ── 保存快照 ─────────────────────────────────────────────────

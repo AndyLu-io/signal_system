@@ -15,7 +15,7 @@ from typing import Optional
 # 确保 signal_system 目录在路径中
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import ETF_UNIVERSE, INDEX_CSI300, INDEX_CSI500
+from config import ETF_UNIVERSE, STOCK_UNIVERSE, INDEX_CSI300, INDEX_CSI500
 import data_fetcher as df_api
 import regime_engine
 import factor_scorer
@@ -27,6 +27,8 @@ import etf_reversal
 from data_health import check_data_health
 from tail_market_scanner import detect_cluster_panic, detect_offense_surge
 import forward_indicators
+import pullback_scanner
+import trend_enhancer
 
 # ─── 日志配置 ─────────────────────────────────────────────────────────────────
 LOG_DIR = Path(__file__).parent / "logs"
@@ -289,6 +291,42 @@ def run() -> None:
         logger.info("飞书推送成功 ✓")
     else:
         logger.warning("飞书推送失败，请检查 Webhook Token")
+
+    # ── 5.5 回踩买入扫描（独立卡片）──────────────────────────────────────────
+    logger.info("Step 5.5: 回踩买入扫描...")
+    etf_pullbacks = pullback_scanner.scan_etf_pullbacks(etf_prices, factor_scores, regime)
+    logger.info(f"  ETF回踩: {len(etf_pullbacks)} 只")
+
+    stock_codes_pb = [c for c, info in STOCK_UNIVERSE.items() if info.get("pool") != "watch"]
+    stock_prices_pb = df_api.get_etf_prices(stock_codes_pb, days=70)
+    stock_pullbacks = pullback_scanner.scan_stock_pullbacks(stock_prices_pb, regime)
+    logger.info(f"  个股回踩: {len(stock_pullbacks)} 只")
+
+    if etf_pullbacks or stock_pullbacks:
+        pb_ok = pullback_scanner.push_pullback_card(etf_pullbacks, stock_pullbacks, regime)
+        logger.info(f"  回踩卡片推送: {'✓' if pb_ok else '✗'}")
+
+    # ── 5.6 趋势加仓 + 异常熔断 ──────────────────────────────────────────────
+    logger.info("Step 5.6: 趋势加仓/异常熔断扫描...")
+    trend_adds = trend_enhancer.scan_trend_add(stock_prices_pb, STOCK_UNIVERSE)
+    logger.info(f"  趋势加仓: {len(trend_adds)} 只")
+
+    breakers = trend_enhancer.scan_circuit_breakers(stock_prices_pb, STOCK_UNIVERSE)
+    if breakers:
+        logger.warning(f"  异常熔断: {len(breakers)} 只 — {[b.name for b in breakers]}")
+
+    from feishu_pusher import post_card as _push
+    from config import FEISHU_STOCK_WEBHOOKS as _STOCK_WH
+    if trend_adds:
+        card = trend_enhancer.build_trend_add_card(trend_adds)
+        if card:
+            _push(card, _STOCK_WH)
+            logger.info("  趋势加仓卡片推送 ✓")
+    if breakers:
+        card = trend_enhancer.build_circuit_breaker_card(breakers)
+        if card:
+            _push(card, _STOCK_WH)
+            logger.info("  异常熔断卡片推送 ✓")
 
     # ── 保存当日日志 ─────────────────────────────────────────────────────────
     save_daily_log({
