@@ -24,15 +24,17 @@ def post_card(
     card: dict,
     webhooks: Iterable[str],
     *,
-    timeout: int = 10,
-    retry_on_rate_limit: bool = True,
-    max_retries: int = 3,
+    timeout: int = 15,
+    max_retries: int = 5,
 ) -> bool:
     """
     向多个 Webhook 发送同一张卡片，任一成功即返回 True。
 
-    遇到飞书限流（code=11232）会指数退避重试 max_retries 次。
-    其他错误不重试，记录 warning 后跳过。
+    重试策略（指数退避）：
+      - 飞书限流（code=11232 或 HTTP 429）
+      - 网络超时 / 连接异常
+      - HTTP 5xx 服务端错误
+    退避间隔: 3s → 6s → 12s → 24s → 48s
     """
     payload = json.dumps(card, ensure_ascii=False)
     headers = {"Content-Type": "application/json"}
@@ -41,32 +43,61 @@ def post_card(
     for url in webhooks:
         if not url:
             continue
-        for attempt in range(max_retries if retry_on_rate_limit else 1):
+        for attempt in range(max_retries):
+            wait = 3 * (2 ** attempt)  # 3, 6, 12, 24, 48
             try:
                 resp = requests.post(url, headers=headers, data=payload, timeout=timeout)
+
+                # HTTP 429 或 5xx → 重试
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"飞书 HTTP {resp.status_code}({url[-8:]}), "
+                            f"{wait}s 后重试 ({attempt+1}/{max_retries})"
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.error(f"飞书 HTTP {resp.status_code}({url[-8:]}) 重试耗尽")
+                    break
+
                 if resp.status_code != 200:
                     logger.warning(
                         f"飞书 HTTP {resp.status_code}({url[-8:]}): {resp.text[:200]}"
                     )
                     break
+
                 result = resp.json()
                 code = result.get("code", result.get("StatusCode", -1))
                 if code == 0:
                     logger.info(f"飞书推送成功: {url[-8:]}")
                     any_success = True
                     break
-                if code == _RATE_LIMIT_CODE and retry_on_rate_limit and attempt < max_retries - 1:
-                    wait = (attempt + 1) * 5
+
+                # 飞书业务限流 → 重试
+                if code == _RATE_LIMIT_CODE and attempt < max_retries - 1:
                     logger.warning(
                         f"飞书限流({url[-8:]}), {wait}s 后重试 ({attempt+1}/{max_retries})"
                     )
                     time.sleep(wait)
                     continue
+
                 logger.warning(f"飞书返回({url[-8:]}): {result}")
                 break
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"飞书推送异常({url[-8:]}): {e}")
+
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"飞书网络异常({url[-8:]}): {e}, "
+                        f"{wait}s 后重试 ({attempt+1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"飞书网络异常({url[-8:]}) 重试耗尽: {e}")
                 break
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"飞书推送未知异常({url[-8:]}): {e}")
+                break
+
     return any_success
 
 

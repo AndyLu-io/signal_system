@@ -1,0 +1,292 @@
+{
+  "account": "stock",
+  "initial_capital": 1000000.0,
+  "cash": 322016.5629691001,
+  "positions": {
+    "300750": {
+      "name": "宁德时代",
+      "shares": 300,
+      "cost_price": 416.09567999999996,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0,
+      "reason": "BUY_STRONG",
+      "note": ""
+    },
+    "688521": {
+      "name": "芯原股份",
+      "shares": 500,
+      "cost_price": 265.21495,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0,
+      "reason": "BUY_STRONG",
+      "note": ""
+    },
+    "605117": {
+      "name": "德业股份",
+      "shares": 1200,
+      "cost_price": 121.93180999999998,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0,
+      "reason": "BUY_STRONG",
+      "note": ""
+    },
+    "688041": {
+      "name": "海光信息",
+      "shares": 400,
+      "cost_price": 314.67436,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    },
+    "600487": {
+      "name": "亨通光电",
+      "shares": 2100,
+      "cost_price": 70.55048,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    }
+  },
+  "nav_history": [
+    {
+      "date": "2026-05-01",
+      "nav": 1000000.0,
+      "cash": 1000000.0,
+      "market_value": 0.0,
+      "position_count": 0,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-04",
+      "nav": 1000000.0,
+      "cash": 1000000.0,
+      "market_value": 0.0,
+      "position_count": 0,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-05",
+      "nav": 1000000.0,
+      "cash": 1000000.0,
+      "market_value": 0.0,
+      "position_count": 0,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-06",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-07",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-08",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-11",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-12",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-13",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-14",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-15",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-18",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-19",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-20",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-21",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-22",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-25",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-26",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-27",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 999119.56,
+      "cash": 322016.56,
+      "market_value": 677103.0,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    }
+  ],
+  "trades": [
+    {
+      "date": "2026-05-06",
+      "code": "300750",
+      "name": "宁德时代",
+      "action": "BUY",
+      "price": 416.0957,
+      "shares": 300,
+      "amount": 124866.15,
+      "reason": "BUY_STRONG"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "688521",
+      "name": "芯原股份",
+      "action": "BUY",
+      "price": 265.2149,
+      "shares": 500,
+      "amount": 132647.26,
+      "reason": "BUY_STRONG"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "605117",
+      "name": "德业股份",
+      "action": "BUY",
+      "price": 121.9318,
+      "shares": 1200,
+      "amount": 146362.07,
+      "reason": "BUY_STRONG"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "688041",
+      "name": "海光信息",
+      "action": "BUY",
+      "price": 314.6744,
+      "shares": 400,
+      "amount": 125907.5,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "600487",
+      "name": "亨通光电",
+      "action": "BUY",
+      "price": 70.5505,
+      "shares": 2100,
+      "amount": 148200.45,
+      "reason": "BUY_WATCH"
+    }
+  ],
+  "created_at": "2026-05-28",
+  "last_update": "2026-05-28T22:24:18"
+}

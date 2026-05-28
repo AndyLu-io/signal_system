@@ -1,0 +1,798 @@
+{
+  "initial_capital": 1000000.0,
+  "cash": 97258.26548797994,
+  "positions": {
+    "159611": {
+      "name": "电力ETF",
+      "shares": 16600,
+      "cost_price": 1.200199,
+      "buy_date": "2026-05-01",
+      "stop_pct": 6.0
+    },
+    "159326": {
+      "name": "电网设备ETF",
+      "shares": 4800,
+      "cost_price": 2.0760739999999998,
+      "buy_date": "2026-05-01",
+      "stop_pct": 6.0
+    },
+    "300750": {
+      "name": "宁德时代",
+      "shares": 100,
+      "cost_price": 416.09567999999996,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0
+    },
+    "688521": {
+      "name": "芯原股份",
+      "shares": 100,
+      "cost_price": 265.21495,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0
+    },
+    "605117": {
+      "name": "德业股份",
+      "shares": 300,
+      "cost_price": 121.93180999999998,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0
+    },
+    "688041": {
+      "name": "海光信息",
+      "shares": 100,
+      "cost_price": 314.67436,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0
+    },
+    "600487": {
+      "name": "亨通光电",
+      "shares": 500,
+      "cost_price": 70.55048,
+      "buy_date": "2026-05-06",
+      "stop_pct": 5.0
+    },
+    "159567": {
+      "name": "港股创新药ETF",
+      "shares": 31100,
+      "cost_price": 0.6416409999999999,
+      "buy_date": "2026-05-06",
+      "stop_pct": 6.0
+    },
+    "002463": {
+      "name": "沪电股份",
+      "shares": 600,
+      "cost_price": 133.19305999999997,
+      "buy_date": "2026-05-07",
+      "stop_pct": 5.0
+    },
+    "300476": {
+      "name": "胜宏科技",
+      "shares": 100,
+      "cost_price": 375.6753,
+      "buy_date": "2026-05-07",
+      "stop_pct": 5.0
+    },
+    "600522": {
+      "name": "中天科技",
+      "shares": 1900,
+      "cost_price": 40.56052,
+      "buy_date": "2026-05-07",
+      "stop_pct": 5.0
+    },
+    "600036": {
+      "name": "招商银行",
+      "shares": 500,
+      "cost_price": 37.15711999999999,
+      "buy_date": "2026-05-07",
+      "stop_pct": 6.0
+    },
+    "515450": {
+      "name": "红利低波50",
+      "shares": 14200,
+      "cost_price": 1.4054039999999997,
+      "buy_date": "2026-05-08",
+      "stop_pct": 6.0
+    },
+    "601869": {
+      "name": "长飞光纤",
+      "shares": 200,
+      "cost_price": 370.92055,
+      "buy_date": "2026-05-11",
+      "stop_pct": 5.0
+    },
+    "600900": {
+      "name": "长江电力",
+      "shares": 700,
+      "cost_price": 27.247219999999995,
+      "buy_date": "2026-05-12",
+      "stop_pct": 6.0
+    },
+    "601138": {
+      "name": "工业富联",
+      "shares": 300,
+      "cost_price": 75.07499999999999,
+      "buy_date": "2026-05-13",
+      "stop_pct": 5.0
+    },
+    "561980": {
+      "name": "半导体设备ETF",
+      "shares": 7300,
+      "cost_price": 3.268265,
+      "buy_date": "2026-05-14",
+      "stop_pct": 8.0
+    },
+    "512480": {
+      "name": "半导体ETF",
+      "shares": 10400,
+      "cost_price": 2.2962939999999996,
+      "buy_date": "2026-05-14",
+      "stop_pct": 8.0
+    },
+    "515880": {
+      "name": "通信ETF",
+      "shares": 14700,
+      "cost_price": 1.6206189999999998,
+      "buy_date": "2026-05-14",
+      "stop_pct": 8.0
+    },
+    "159995": {
+      "name": "芯片ETF",
+      "shares": 9000,
+      "cost_price": 2.6396369999999996,
+      "buy_date": "2026-05-14",
+      "stop_pct": 8.0
+    },
+    "512400": {
+      "name": "有色金属ETF",
+      "shares": 10000,
+      "cost_price": 1.992991,
+      "buy_date": "2026-05-14",
+      "stop_pct": 6.0
+    },
+    "513180": {
+      "name": "恒生科技ETF",
+      "shares": 32200,
+      "cost_price": 0.6186179999999999,
+      "buy_date": "2026-05-15",
+      "stop_pct": 6.0
+    },
+    "159206": {
+      "name": "卫星ETF",
+      "shares": 11200,
+      "cost_price": 1.7727709999999997,
+      "buy_date": "2026-05-15",
+      "stop_pct": 6.0
+    },
+    "510050": {
+      "name": "上证50ETF",
+      "shares": 6600,
+      "cost_price": 2.99299,
+      "buy_date": "2026-05-15",
+      "stop_pct": 6.0
+    },
+    "159715": {
+      "name": "稀土ETF",
+      "shares": 14900,
+      "cost_price": 1.333332,
+      "buy_date": "2026-05-15",
+      "stop_pct": 6.0
+    },
+    "300274": {
+      "name": "阳光电源",
+      "shares": 100,
+      "cost_price": 190.28008999999997,
+      "buy_date": "2026-05-18",
+      "stop_pct": 8.0
+    },
+    "562500": {
+      "name": "机器人ETF",
+      "shares": 16200,
+      "cost_price": 1.166165,
+      "buy_date": "2026-05-18",
+      "stop_pct": 8.0
+    },
+    "515790": {
+      "name": "光伏ETF",
+      "shares": 17600,
+      "cost_price": 1.1291279999999997,
+      "buy_date": "2026-05-18",
+      "stop_pct": 6.0
+    },
+    "510500": {
+      "name": "中证500ETF",
+      "shares": 2300,
+      "cost_price": 8.657648999999997,
+      "buy_date": "2026-05-18",
+      "stop_pct": 6.0
+    },
+    "561910": {
+      "name": "电池ETF",
+      "shares": 20800,
+      "cost_price": 0.9589579999999999,
+      "buy_date": "2026-05-18",
+      "stop_pct": 6.0
+    },
+    "159941": {
+      "name": "纳指ETF",
+      "shares": 12100,
+      "cost_price": 1.6476459999999997,
+      "buy_date": "2026-05-18",
+      "stop_pct": 6.0
+    },
+    "159915": {
+      "name": "创业板ETF",
+      "shares": 4800,
+      "cost_price": 4.142137999999999,
+      "buy_date": "2026-05-20",
+      "stop_pct": 6.0
+    }
+  },
+  "nav_history": [
+    {
+      "date": "2026-05-01",
+      "nav": 999948.23,
+      "cash": 960134.43,
+      "market_value": 39813.8,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-04",
+      "nav": 999948.23,
+      "cash": 960134.43,
+      "market_value": 39813.8,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-05",
+      "nav": 999948.23,
+      "cash": 960134.43,
+      "market_value": 39813.8,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-06",
+      "nav": 999686.65,
+      "cash": 778610.95,
+      "market_value": 221075.7,
+      "position_count": 8,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-07",
+      "nav": 999409.8,
+      "cash": 565420.1,
+      "market_value": 433989.7,
+      "position_count": 12,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-08",
+      "nav": 999383.88,
+      "cash": 545457.38,
+      "market_value": 453926.5,
+      "position_count": 13,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-11",
+      "nav": 999287.51,
+      "cash": 471251.01,
+      "market_value": 528036.5,
+      "position_count": 14,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-12",
+      "nav": 999262.73,
+      "cash": 452172.23,
+      "market_value": 547090.5,
+      "position_count": 15,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-13",
+      "nav": 999233.48,
+      "cash": 429642.98,
+      "market_value": 569590.5,
+      "position_count": 16,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-14",
+      "nav": 999044.96,
+      "cash": 284475.06,
+      "market_value": 714569.9,
+      "position_count": 22,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-15",
+      "nav": 998941.83,
+      "cash": 205056.33,
+      "market_value": 793885.5,
+      "position_count": 26,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-18",
+      "nav": 998789.08,
+      "cash": 87433.08,
+      "market_value": 911356.0,
+      "position_count": 32,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-19",
+      "nav": 998789.08,
+      "cash": 87433.08,
+      "market_value": 911356.0,
+      "position_count": 32,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-20",
+      "nav": 998737.42,
+      "cash": 47653.02,
+      "market_value": 951084.4,
+      "position_count": 34,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-21",
+      "nav": 998716.84,
+      "cash": 31806.84,
+      "market_value": 966910.0,
+      "position_count": 35,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-22",
+      "nav": 998716.84,
+      "cash": 31806.84,
+      "market_value": 966910.0,
+      "position_count": 35,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-25",
+      "nav": 998716.84,
+      "cash": 31806.84,
+      "market_value": 966910.0,
+      "position_count": 35,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-26",
+      "nav": 998716.84,
+      "cash": 31806.84,
+      "market_value": 966910.0,
+      "position_count": 35,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-27",
+      "nav": 998631.67,
+      "cash": 97258.27,
+      "market_value": 901373.4,
+      "position_count": 32,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998631.67,
+      "cash": 97258.27,
+      "market_value": 901373.4,
+      "position_count": 32,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998559.87,
+      "cash": 97258.27,
+      "market_value": 901301.6,
+      "position_count": 32,
+      "benchmark_close": 4.932
+    }
+  ],
+  "trades": [
+    {
+      "date": "2026-05-01",
+      "code": "159611",
+      "name": "电力ETF",
+      "action": "BUY",
+      "price": 1.2002,
+      "shares": 16600,
+      "amount": 19929.28,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-01",
+      "code": "159326",
+      "name": "电网设备ETF",
+      "action": "BUY",
+      "price": 2.0761,
+      "shares": 9600,
+      "amount": 19936.29,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "159326",
+      "name": "电网设备ETF",
+      "action": "SELL",
+      "price": 2.0719,
+      "shares": 4800,
+      "amount": 9942.26,
+      "pnl_pct": -0.2,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "300750",
+      "name": "宁德时代",
+      "action": "BUY",
+      "price": 416.0957,
+      "shares": 100,
+      "amount": 41622.05,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "688521",
+      "name": "芯原股份",
+      "action": "BUY",
+      "price": 265.2149,
+      "shares": 100,
+      "amount": 26529.45,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "605117",
+      "name": "德业股份",
+      "action": "BUY",
+      "price": 121.9318,
+      "shares": 300,
+      "amount": 36590.52,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "688041",
+      "name": "海光信息",
+      "action": "BUY",
+      "price": 314.6744,
+      "shares": 100,
+      "amount": 31476.88,
+      "reason": "BUY_WATCH(stock)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "600487",
+      "name": "亨通光电",
+      "action": "BUY",
+      "price": 70.5505,
+      "shares": 500,
+      "amount": 35285.82,
+      "reason": "BUY_WATCH(stock)"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "159567",
+      "name": "港股创新药ETF",
+      "action": "BUY",
+      "price": 0.6416,
+      "shares": 31100,
+      "amount": 19961.02,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "002463",
+      "name": "沪电股份",
+      "action": "BUY",
+      "price": 133.1931,
+      "shares": 600,
+      "amount": 79939.81,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "300476",
+      "name": "胜宏科技",
+      "action": "BUY",
+      "price": 375.6753,
+      "shares": 100,
+      "amount": 37578.8,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "600522",
+      "name": "中天科技",
+      "action": "BUY",
+      "price": 40.5605,
+      "shares": 1900,
+      "amount": 77088.11,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "600036",
+      "name": "招商银行",
+      "action": "BUY",
+      "price": 37.1571,
+      "shares": 500,
+      "amount": 18584.13,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-08",
+      "code": "515450",
+      "name": "红利低波50",
+      "action": "BUY",
+      "price": 1.4054,
+      "shares": 14200,
+      "amount": 19962.72,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-11",
+      "code": "601869",
+      "name": "长飞光纤",
+      "action": "BUY",
+      "price": 370.9205,
+      "shares": 200,
+      "amount": 74206.37,
+      "reason": "BUY_STRONG(stock)"
+    },
+    {
+      "date": "2026-05-12",
+      "code": "600900",
+      "name": "长江电力",
+      "action": "BUY",
+      "price": 27.2472,
+      "shares": 700,
+      "amount": 19078.78,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-13",
+      "code": "601138",
+      "name": "工业富联",
+      "action": "BUY",
+      "price": 75.075,
+      "shares": 300,
+      "amount": 22529.26,
+      "reason": "BUY_WATCH(stock)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "561980",
+      "name": "半导体设备ETF",
+      "action": "BUY",
+      "price": 3.2683,
+      "shares": 7300,
+      "amount": 23865.49,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "512480",
+      "name": "半导体ETF",
+      "action": "BUY",
+      "price": 2.2963,
+      "shares": 10400,
+      "amount": 23888.62,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "515880",
+      "name": "通信ETF",
+      "action": "BUY",
+      "price": 1.6206,
+      "shares": 14700,
+      "amount": 23830.25,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "159995",
+      "name": "芯片ETF",
+      "action": "BUY",
+      "price": 2.6396,
+      "shares": 9000,
+      "amount": 23763.86,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "516850",
+      "name": "新能源ETF",
+      "action": "BUY",
+      "price": 1.1762,
+      "shares": 25400,
+      "amount": 29883.81,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-14",
+      "code": "512400",
+      "name": "有色金属ETF",
+      "action": "BUY",
+      "price": 1.993,
+      "shares": 10000,
+      "amount": 19935.89,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-15",
+      "code": "513180",
+      "name": "恒生科技ETF",
+      "action": "BUY",
+      "price": 0.6186,
+      "shares": 32200,
+      "amount": 19925.48,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-15",
+      "code": "159206",
+      "name": "卫星ETF",
+      "action": "BUY",
+      "price": 1.7728,
+      "shares": 11200,
+      "amount": 19860.99,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-15",
+      "code": "510050",
+      "name": "上证50ETF",
+      "action": "BUY",
+      "price": 2.993,
+      "shares": 6600,
+      "amount": 19759.66,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-15",
+      "code": "159715",
+      "name": "稀土ETF",
+      "action": "BUY",
+      "price": 1.3333,
+      "shares": 14900,
+      "amount": 19872.61,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "300274",
+      "name": "阳光电源",
+      "action": "BUY",
+      "price": 190.2801,
+      "shares": 100,
+      "amount": 19033.72,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "562500",
+      "name": "机器人ETF",
+      "action": "BUY",
+      "price": 1.1662,
+      "shares": 16200,
+      "amount": 18897.54,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "515790",
+      "name": "光伏ETF",
+      "action": "BUY",
+      "price": 1.1291,
+      "shares": 17600,
+      "amount": 19878.61,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "510500",
+      "name": "中证500ETF",
+      "action": "BUY",
+      "price": 8.6576,
+      "shares": 2300,
+      "amount": 19918.57,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "561910",
+      "name": "电池ETF",
+      "action": "BUY",
+      "price": 0.959,
+      "shares": 20800,
+      "amount": 19952.31,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-18",
+      "code": "159941",
+      "name": "纳指ETF",
+      "action": "BUY",
+      "price": 1.6476,
+      "shares": 12100,
+      "amount": 19942.5,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-20",
+      "code": "159915",
+      "name": "创业板ETF",
+      "action": "BUY",
+      "price": 4.1421,
+      "shares": 4800,
+      "amount": 19888.23,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-20",
+      "code": "159909",
+      "name": "TMT50ETF",
+      "action": "BUY",
+      "price": 1.5065,
+      "shares": 13200,
+      "amount": 19891.83,
+      "reason": "BUY_WATCH(tail)"
+    },
+    {
+      "date": "2026-05-21",
+      "code": "588080",
+      "name": "科创50ETF",
+      "action": "BUY",
+      "price": 1.8859,
+      "shares": 8400,
+      "amount": 15846.18,
+      "reason": "BUY_WATCH(etf)"
+    },
+    {
+      "date": "2026-05-27",
+      "code": "516850",
+      "name": "新能源ETF",
+      "action": "SELL",
+      "price": 1.1738,
+      "shares": 25400,
+      "amount": 29806.21,
+      "pnl_pct": -0.2,
+      "reason": "SELL_STOP"
+    },
+    {
+      "date": "2026-05-27",
+      "code": "588080",
+      "name": "科创50ETF",
+      "action": "SELL",
+      "price": 1.8821,
+      "shares": 8400,
+      "amount": 15805.03,
+      "pnl_pct": -0.2,
+      "reason": "SELL_STOP"
+    },
+    {
+      "date": "2026-05-27",
+      "code": "159909",
+      "name": "TMT50ETF",
+      "action": "SELL",
+      "price": 1.5035,
+      "shares": 13200,
+      "amount": 19840.18,
+      "pnl_pct": -0.2,
+      "reason": "SELL_STOP"
+    }
+  ],
+  "created_at": "2026-05-28",
+  "last_update": "2026-05-28T22:06:17"
+}

@@ -1,0 +1,303 @@
+{
+  "account": "etf",
+  "initial_capital": 1000000.0,
+  "cash": 326420.36895685,
+  "positions": {
+    "159611": {
+      "name": "电力ETF",
+      "shares": 124900,
+      "cost_price": 1.200199,
+      "buy_date": "2026-05-01",
+      "stop_pct": 6.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    },
+    "159326": {
+      "name": "电网设备ETF",
+      "shares": 36100,
+      "cost_price": 2.0760739999999998,
+      "buy_date": "2026-05-01",
+      "stop_pct": 6.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    },
+    "159567": {
+      "name": "港股创新药ETF",
+      "shares": 233600,
+      "cost_price": 0.6416409999999999,
+      "buy_date": "2026-05-06",
+      "stop_pct": 6.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    },
+    "600036": {
+      "name": "招商银行",
+      "shares": 4000,
+      "cost_price": 37.15711999999999,
+      "buy_date": "2026-05-07",
+      "stop_pct": 6.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    },
+    "515450": {
+      "name": "红利低波50",
+      "shares": 106600,
+      "cost_price": 1.4054039999999997,
+      "buy_date": "2026-05-08",
+      "stop_pct": 6.0,
+      "reason": "BUY_WATCH",
+      "note": ""
+    }
+  },
+  "nav_history": [
+    {
+      "date": "2026-05-01",
+      "nav": 999610.56,
+      "cash": 700112.66,
+      "market_value": 299497.9,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-04",
+      "nav": 999610.56,
+      "cash": 700112.66,
+      "market_value": 299497.9,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-05",
+      "nav": 999610.56,
+      "cash": 700112.66,
+      "market_value": 299497.9,
+      "position_count": 2,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-06",
+      "nav": 999318.55,
+      "cash": 624954.45,
+      "market_value": 374364.1,
+      "position_count": 3,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-07",
+      "nav": 999125.48,
+      "cash": 476281.38,
+      "market_value": 522844.1,
+      "position_count": 4,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-08",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-11",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-12",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-13",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-14",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-15",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-18",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-19",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-20",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-21",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-22",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-25",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-26",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-27",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    },
+    {
+      "date": "2026-05-28",
+      "nav": 998930.87,
+      "cash": 326420.37,
+      "market_value": 672510.5,
+      "position_count": 5,
+      "benchmark_close": 4.932
+    }
+  ],
+  "trades": [
+    {
+      "date": "2026-05-01",
+      "code": "159611",
+      "name": "电力ETF",
+      "action": "BUY",
+      "price": 1.2002,
+      "shares": 124900,
+      "amount": 149949.83,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-05-01",
+      "code": "159326",
+      "name": "电网设备ETF",
+      "action": "BUY",
+      "price": 2.0761,
+      "shares": 72200,
+      "amount": 149937.51,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "159326",
+      "name": "电网设备ETF",
+      "action": "SELL",
+      "price": 2.0719,
+      "shares": 36100,
+      "amount": 74774.09,
+      "pnl_pct": -0.2,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "159567",
+      "name": "港股创新药ETF",
+      "action": "BUY",
+      "price": 0.6416,
+      "shares": 233600,
+      "amount": 149932.3,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "600036",
+      "name": "招商银行",
+      "action": "BUY",
+      "price": 37.1571,
+      "shares": 4000,
+      "amount": 148673.07,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-05-08",
+      "code": "515450",
+      "name": "红利低波50",
+      "action": "BUY",
+      "price": 1.4054,
+      "shares": 106600,
+      "amount": 149861.01,
+      "reason": "BUY_WATCH"
+    }
+  ],
+  "created_at": "2026-05-28",
+  "last_update": "2026-05-28T22:24:18"
+}
