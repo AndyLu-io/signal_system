@@ -236,8 +236,78 @@ def check_stop_loss(state: dict, today: str) -> int:
     return triggered
 
 
-def consume_signals(state: dict, signals: list[dict], today: str) -> dict:
+def veteran_filter(signals: list[dict], account: str, state: dict) -> list[dict]:
+    """
+    资深投资者决策层 — 在系统信号基础上做二次过滤。
+
+    核心原则：
+      - 宁可错过，不可做错（只做高确定性机会）
+      - 顺势而为，不抄底摸顶
+      - 已满仓时只进不出（等信号换仓）
+      - 连续下跌的不接飞刀
+    """
+    filtered = []
+
+    for sig in signals:
+        signal_type = sig.get("signal", "")
+        composite = sig.get("composite", 0)
+        code = sig.get("code", "")
+
+        # 卖出/减仓信号直接放行
+        if signal_type in ("SELL_STOP", "REDUCE"):
+            filtered.append(sig)
+            continue
+
+        # 非买入信号跳过
+        if signal_type not in ("BUY_STRONG", "BUY_WATCH", "BUY"):
+            continue
+
+        # ── 个股账户：score是0-10尺度，用信号类型判断 ──
+        if account == "stock":
+            if signal_type == "BUY_STRONG":
+                sig = {**sig, "composite": 90}  # 确保排序靠前
+                filtered.append(sig)
+            elif signal_type == "BUY_WATCH" and composite >= 4:
+                sig = {**sig, "composite": 70}
+                filtered.append(sig)
+            continue
+
+        # ── ETF/指数账户：composite 是 0-100 尺度 ──
+
+        # 1. composite 太低不做
+        if composite < 55:
+            continue
+
+        # 2. 尾盘信号只做高分的（>=65）
+        if sig.get("stars") is not None and sig.get("score", 0) < 65:
+            continue
+
+        # 3. 底部翻转：资深投资者只在高确定性时布局（>=12/18分 → composite>=79）
+        if sig.get("source") == "reversal" and composite < 75:
+            continue
+
+        # 4. 指数账户：只做趋势明确的
+        if account == "index" and composite < 60:
+            continue
+
+        # 4. 已持仓的不重复买
+        if code in state.get("positions", {}):
+            continue
+
+        # 5. BUY_STRONG 加排序权重
+        if signal_type == "BUY_STRONG":
+            sig = {**sig, "composite": composite + 20}
+
+        filtered.append(sig)
+
+    return filtered
+
+
+def consume_signals(state: dict, signals: list[dict], today: str, account: str = "etf") -> dict:
     summary = {"buys": 0, "sells": 0, "skipped": 0, "stop_losses": 0}
+
+    # 资深投资者决策过滤
+    signals = veteran_filter(signals, account, state)
 
     summary["stop_losses"] = check_stop_loss(state, today)
 
@@ -375,80 +445,135 @@ def calc_performance(state: dict) -> dict:
 
 # ─── 信号加载（按账户类型筛选） ────────────────────────────────────────────────
 
-def load_signals_for_account(account: str, today: str) -> list[dict]:
-    """按账户类型加载对应信号源。"""
+def load_signals_for_account(account: str, today: str, session: str = "all") -> list[dict]:
+    """
+    按账户类型和时段加载对应信号。
+    session: "morning"=早盘(09:30), "afternoon"=尾盘(14:45), "all"=全天合并
+    """
     date_compact = today.replace("-", "")
     signals = []
 
     if account == "etf":
-        # ETF 主信号 + 尾盘中的 ETF
-        f1 = _LOGS_DIR / f"signal_detail_{date_compact}.json"
-        if f1.exists():
-            data = json.loads(f1.read_text(encoding="utf-8"))
-            for sig in data.get("signals", []):
-                signals.append(sig)
+        # 早盘: ETF主信号（08:30生成）
+        if session in ("morning", "all"):
+            f1 = _LOGS_DIR / f"signal_detail_{date_compact}.json"
+            if f1.exists():
+                data = json.loads(f1.read_text(encoding="utf-8"))
+                for sig in data.get("signals", []):
+                    signals.append(sig)
 
-        f2 = _LOGS_DIR / f"tail_detail_{date_compact}.json"
-        if f2.exists():
-            data = json.loads(f2.read_text(encoding="utf-8"))
-            for s in data.get("signals", []):
-                if s.get("stars", 0) < 2:
-                    continue
-                signals.append({
-                    "code": s["code"], "name": s["name"], "signal": "BUY_WATCH",
-                    "weight_pct": {3: 3.0, 2: 2.0}.get(s.get("stars", 1), 1.5),
-                    "stop_loss_pct": 6.0,
-                    "composite": s.get("score", 50),
-                })
+            # 底部翻转检测 — 资深投资者视角：只做高分翻转（>=12/18）
+            try:
+                import etf_reversal
+                from config import ETF_UNIVERSE
+                reversal_codes = list(ETF_UNIVERSE.keys())
+                rev_prices = get_etf_prices(reversal_codes, days=60)
+                for code, df in rev_prices.items():
+                    if df is None or df.empty:
+                        continue
+                    info = ETF_UNIVERSE.get(code, {})
+                    if not info:
+                        continue
+                    rev = etf_reversal.check_reversal(
+                        code=code, df=df, info=info,
+                    )
+                    if rev and rev["rev_pts"] >= 12:
+                        details = rev.get("rev_details", "")
+                        signals.append({
+                            "code": code,
+                            "name": rev["name"],
+                            "signal": "BUY_WATCH",
+                            "weight_pct": 5.0,
+                            "stop_loss_pct": 8.0,
+                            "composite": min(95, 55 + rev["rev_pts"] * 2),
+                            "note": f"底部翻转{rev['rev_pts']}/18分; {details[:30]}",
+                            "source": "reversal",
+                        })
+            except Exception as e:
+                logger.warning(f"底部翻转检测异常: {e}")
+
+        # 尾盘: tail_detail（14:45生成）
+        if session in ("afternoon", "all"):
+            f2 = _LOGS_DIR / f"tail_detail_{date_compact}.json"
+            if f2.exists():
+                data = json.loads(f2.read_text(encoding="utf-8"))
+                for s in data.get("signals", []):
+                    if s.get("stars", 0) < 2:
+                        continue
+                    signals.append({
+                        "code": s["code"], "name": s["name"], "signal": "BUY_WATCH",
+                        "weight_pct": {3: 3.0, 2: 2.0}.get(s.get("stars", 1), 1.5),
+                        "stop_loss_pct": 6.0,
+                        "composite": s.get("score", 50),
+                        "note": "; ".join(s.get("triggers", [])[:3]),
+                    })
 
     elif account == "stock":
-        # 个股择时信号
-        f1 = _LOGS_DIR / f"stock_timing_{today}.json"
-        if f1.exists():
-            stocks = json.loads(f1.read_text(encoding="utf-8"))
-            for s in stocks:
-                if s.get("signal") not in ("BUY_STRONG", "BUY_WATCH", "SELL_STOP"):
-                    continue
-                if s.get("position_pct", 0) <= 0 and "BUY" in s.get("signal", ""):
-                    continue
-                stop_price = s.get("stop_price", 0)
-                close = s.get("close", 0)
-                stop_pct = round(abs(1 - stop_price / close) * 100, 1) if stop_price and close else 6.0
-                signals.append({
-                    "code": s["code"], "name": s["name"], "signal": s["signal"],
-                    "weight_pct": s.get("position_pct", 3.0),
-                    "stop_loss_pct": stop_pct,
-                    "composite": s.get("score", 50),
-                })
+        # 个股择时（盘中每小时运行，取最新一份）
+        if session in ("morning", "all"):
+            f1 = _LOGS_DIR / f"stock_timing_{today}.json"
+            if f1.exists():
+                stocks = json.loads(f1.read_text(encoding="utf-8"))
+                for s in stocks:
+                    if s.get("signal") not in ("BUY_STRONG", "BUY_WATCH", "SELL_STOP"):
+                        continue
+                    if s.get("position_pct", 0) <= 0 and "BUY" in s.get("signal", ""):
+                        continue
+                    stop_price = s.get("stop_price", 0)
+                    close = s.get("close", 0)
+                    stop_pct = round(abs(1 - stop_price / close) * 100, 1) if stop_price and close else 6.0
+                    signals.append({
+                        "code": s["code"], "name": s["name"], "signal": s["signal"],
+                        "weight_pct": s.get("position_pct", 3.0),
+                        "stop_loss_pct": stop_pct,
+                        "composite": s.get("score", 50),
+                        "note": "; ".join(s.get("reasons", [])[:3]),
+                    })
 
     elif account == "index":
-        # 指数择时信号
         f1 = _LOGS_DIR / f"index_timing_{today}.json"
         if f1.exists():
             data = json.loads(f1.read_text(encoding="utf-8"))
             runs = data.get("runs", [])
-            if runs:
-                latest_run = runs[-1]
-                for e in latest_run.get("etfs", []):
-                    sig_type = e.get("signal", "HOLD")
-                    if sig_type == "BUY":
-                        weight = min(15.0, max(5.0, e.get("composite", 50) / 10))
-                        signals.append({
-                            "code": e["code"], "name": e["name"], "signal": "BUY_WATCH",
-                            "weight_pct": round(weight, 1),
-                            "stop_loss_pct": 5.0,
-                            "composite": e.get("composite", 50),
-                        })
-                    elif sig_type == "SELL":
-                        signals.append({
-                            "code": e["code"], "name": e["name"], "signal": "SELL_STOP",
-                            "weight_pct": 0, "stop_loss_pct": 0, "composite": 0,
-                        })
-                    elif sig_type == "REDUCE":
-                        signals.append({
-                            "code": e["code"], "name": e["name"], "signal": "REDUCE",
-                            "weight_pct": 0, "stop_loss_pct": 0, "composite": 0,
-                        })
+            if not runs:
+                return signals
+
+            # 早盘: 取 09:25-09:35 的第一个 run
+            # 尾盘: 取 14:40-15:00 的最后一个 run
+            # all: 取收盘后最后一个 run
+            if session == "morning":
+                target_runs = [r for r in runs if "09:" in r.get("time", "")]
+            elif session == "afternoon":
+                target_runs = [r for r in runs if r.get("time", "") >= "14:40"]
+            else:
+                target_runs = runs
+
+            if not target_runs:
+                target_runs = runs
+
+            # 用最后一个匹配的 run（最新信号）
+            latest_run = target_runs[-1]
+            for e in latest_run.get("etfs", []):
+                sig_type = e.get("signal", "HOLD")
+                if sig_type == "BUY":
+                    weight = min(15.0, max(5.0, e.get("composite", 50) / 10))
+                    signals.append({
+                        "code": e["code"], "name": e["name"], "signal": "BUY_WATCH",
+                        "weight_pct": round(weight, 1),
+                        "stop_loss_pct": 5.0,
+                        "composite": e.get("composite", 50),
+                        "note": e.get("details", {}).get("label", "指数择时信号"),
+                    })
+                elif sig_type == "SELL":
+                    signals.append({
+                        "code": e["code"], "name": e["name"], "signal": "SELL_STOP",
+                        "weight_pct": 0, "stop_loss_pct": 0, "composite": 0,
+                    })
+                elif sig_type == "REDUCE":
+                    signals.append({
+                        "code": e["code"], "name": e["name"], "signal": "REDUCE",
+                        "weight_pct": 0, "stop_loss_pct": 0, "composite": 0,
+                    })
 
     return signals
 
@@ -556,7 +681,39 @@ def push_combined_summary(results: dict[str, dict], today: str, dry: bool = Fals
 
             pos_content = "\n\n".join(pos_lines)
 
+        # ── 今日交易记录 ──
+        today_trades = [t for t in state["trades"] if t["date"] == today]
+        if today_trades:
+            trade_lines = ["**📋 今日交易记录**"]
+            for t in today_trades:
+                if t["action"] == "BUY":
+                    trade_lines.append(
+                        f"    🟢 **买入** {t['name']}  ▸  {t['shares']}股  ▸  "
+                        f"价格 {t['price']:.2f}  ▸  金额 {t['amount']:,.0f}\n"
+                        f"    　　信号: {t.get('reason', '')}"
+                    )
+                else:
+                    pnl = t.get("pnl_pct", 0)
+                    pnl_icon = "🟢" if pnl > 0 else "🔴"
+                    trade_lines.append(
+                        f"    {pnl_icon} **卖出** {t['name']}  ▸  {t['shares']}股  ▸  "
+                        f"价格 {t['price']:.2f}  ▸  金额 {t['amount']:,.0f}\n"
+                        f"    　　盈亏 **{pnl:+.2f}%**  ▸  原因: {t.get('reason', '')}"
+                    )
+            trade_content = "\n\n".join(trade_lines)
+        else:
+            trade_content = ""
+
         # ── 组装卡片 ──
+        card_elements = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": overview}},
+            {"tag": "hr"},
+            {"tag": "div", "text": {"tag": "lark_md", "content": pos_content}},
+        ]
+        if trade_content:
+            card_elements.append({"tag": "hr"})
+            card_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": trade_content}})
+
         card = {
             "msg_type": "interactive",
             "card": {
@@ -567,11 +724,7 @@ def push_combined_summary(results: dict[str, dict], today: str, dry: bool = Fals
                     },
                     "template": template,
                 },
-                "elements": [
-                    {"tag": "div", "text": {"tag": "lark_md", "content": overview}},
-                    {"tag": "hr"},
-                    {"tag": "div", "text": {"tag": "lark_md", "content": pos_content}},
-                ],
+                "elements": card_elements,
             },
         }
 
@@ -586,19 +739,22 @@ def push_combined_summary(results: dict[str, dict], today: str, dry: bool = Fals
 
 # ─── 主运行逻辑 ────────────────────────────────────────────────────────────────
 
-def run_all(today: str, dry: bool = False) -> None:
-    """运行三个账户并推送对比卡片。"""
+def run_all(today: str, dry: bool = False, session: str = "all") -> None:
+    """
+    运行三个账户并推送对比卡片。
+    session: "morning"=早盘操作, "afternoon"=尾盘操作+推送日报, "all"=全天
+    """
     results = {}
 
     for acct in ("etf", "stock", "index"):
         state = load_state(acct)
-        signals = load_signals_for_account(acct, today)
+        signals = load_signals_for_account(acct, today, session=session)
 
         all_codes = list(state["positions"].keys()) + [s["code"] for s in signals]
         if all_codes:
             preload_prices(list(set(all_codes)))
 
-        summary = consume_signals(state, signals, today)
+        summary = consume_signals(state, signals, today, account=acct)
         update_nav(state, today)
         perf = calc_performance(state)
         save_state(state)
@@ -607,11 +763,18 @@ def run_all(today: str, dry: bool = False) -> None:
 
         label = ACCOUNTS[acct]["label"]
         logger.info(
-            f"[{label}] NAV={perf['current_nav']:,.0f} "
+            f"[{label}] {session} | NAV={perf['current_nav']:,.0f} "
             f"买{summary['buys']} 卖{summary['sells']} 止损{summary['stop_losses']}"
         )
 
-    push_combined_summary(results, today, dry=dry)
+    # 推送卡片：尾盘和 all 模式推送，早盘仅有操作时推送
+    morning_has_action = session == "morning" and any(
+        r["summary"]["buys"] + r["summary"]["sells"] + r["summary"]["stop_losses"] > 0
+        for r in results.values()
+    )
+
+    if session in ("afternoon", "all") or morning_has_action:
+        push_combined_summary(results, today, dry=dry)
 
 
 # ─── CLI ───────────────────────────────────────────────────────────────────────
@@ -628,6 +791,8 @@ def main():
     parser.add_argument("--reset", action="store_true", help="重置全部账户")
     parser.add_argument("--status", action="store_true", help="查看状态")
     parser.add_argument("--force", action="store_true", help="跳过交易日检查")
+    parser.add_argument("--session", choices=["morning", "afternoon", "all"], default="all",
+                        help="运行时段: morning=早盘, afternoon=尾盘, all=全天")
     args = parser.parse_args()
 
     if args.reset:
@@ -657,7 +822,7 @@ def main():
         logger.info(f"{today} 非交易日，跳过")
         return
 
-    run_all(today, dry=args.dry)
+    run_all(today, dry=args.dry, session=args.session)
 
 
 if __name__ == "__main__":

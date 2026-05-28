@@ -10,7 +10,7 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_STRONG",
-      "note": ""
+      "note": "多头排列; MACD金叉; MA60上行(+2.3%/5日)"
     },
     "688521": {
       "name": "芯原股份",
@@ -19,7 +19,7 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_STRONG",
-      "note": ""
+      "note": "多头排列; 红柱扩张; 放量1.8x"
     },
     "605117": {
       "name": "德业股份",
@@ -28,7 +28,7 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_STRONG",
-      "note": ""
+      "note": "多头排列; MACD金叉; MA60上行(+4.0%/5日)"
     },
     "688041": {
       "name": "海光信息",
@@ -37,7 +37,7 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "多头排列; 红柱扩张; RSI超买82"
     },
     "600487": {
       "name": "亨通光电",
@@ -46,7 +46,7 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "多头排列; 红柱扩张; RSI偏高76"
     }
   },
   "nav_history": [
@@ -225,14 +225,6 @@
       "market_value": 677103.0,
       "position_count": 5,
       "benchmark_close": 4.932
-    },
-    {
-      "date": "2026-05-28",
-      "nav": 999119.56,
-      "cash": 322016.56,
-      "market_value": 677103.0,
-      "position_count": 5,
-      "benchmark_close": 4.932
     }
   ],
   "trades": [
@@ -288,5 +280,5 @@
     }
   ],
   "created_at": "2026-05-28",
-  "last_update": "2026-05-28T22:24:18"
+  "last_update": "2026-05-28T22:38:50"
 }

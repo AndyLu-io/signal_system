@@ -1,7 +1,7 @@
 {
   "account": "index",
   "initial_capital": 1000000.0,
-  "cash": 549620.27123454,
+  "cash": 549496.83187746,
   "positions": {
     "513520": {
       "name": "日经225",
@@ -10,7 +10,7 @@
       "buy_date": "2026-05-01",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "动量偏强"
     },
     "513400": {
       "name": "道琼斯",
@@ -19,16 +19,16 @@
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "动量偏强"
     },
     "513180": {
       "name": "恒生科技",
-      "shares": 300,
+      "shares": 500,
       "cost_price": 0.6186179999999999,
       "buy_date": "2026-05-06",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "动量偏强"
     },
     "510050": {
       "name": "上证50",
@@ -37,7 +37,7 @@
       "buy_date": "2026-05-07",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "动量偏强"
     },
     "510300": {
       "name": "沪深300",
@@ -46,7 +46,7 @@
       "buy_date": "2026-05-08",
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
-      "note": ""
+      "note": "动量偏强"
     }
   },
   "nav_history": [
@@ -225,14 +225,6 @@
       "market_value": 449141.8,
       "position_count": 5,
       "benchmark_close": 4.932
-    },
-    {
-      "date": "2026-05-28",
-      "nav": 998638.47,
-      "cash": 549620.27,
-      "market_value": 449018.2,
-      "position_count": 5,
-      "benchmark_close": 4.932
     }
   ],
   "trades": [
@@ -406,19 +398,8 @@
       "amount": 308.6,
       "pnl_pct": -0.2,
       "reason": "REDUCE"
-    },
-    {
-      "date": "2026-05-28",
-      "code": "513180",
-      "name": "恒生科技",
-      "action": "SELL",
-      "price": 0.6174,
-      "shares": 200,
-      "amount": 123.44,
-      "pnl_pct": -0.2,
-      "reason": "REDUCE"
     }
   ],
   "created_at": "2026-05-28",
-  "last_update": "2026-05-28T22:24:18"
+  "last_update": "2026-05-28T22:38:50"
 }
