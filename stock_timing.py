@@ -1377,6 +1377,136 @@ def _reversal_line(r: dict) -> str:
     )
 
 
+def _triple_align_watch_line(r: dict) -> str:
+    """三线共振候观区格式化：日线即将金叉+周线零轴上金叉+月线站MA6，偏离MA20过高暂不买。"""
+    ind  = r["ind"]
+    info = r["info"]
+    close   = ind["close"]
+    ma20    = ind["ma20"]
+    dev_ma20 = (close - ma20) / ma20 * 100
+    entry_lo = round(ma20 * 0.99, 2)
+    entry_hi = round(ma20 * 1.02, 2)
+    wk  = r.get("wk", {})
+    mk  = r.get("mk", {})
+    wk_str = f"DIF={wk.get('dif',0):+.2f}" if wk.get("ok") else "—"
+    mk_str = "站MA6✅" if mk.get("above_ma6") else "MA3↑"
+    return (
+        f"📌 **{info['name']}**（{r['code']}）｜{info.get('signal_3d','—')} "
+        f"{info.get('theme','')}  [{info.get('pool','')}]\n"
+        f"  三线共振：日线即将金叉🔔  周线{wk_str}零轴上✅  月线{mk_str}\n"
+        f"  当前价 **{close:.2f}**  偏MA20 **{dev_ma20:+.1f}%**  RSI={ind['rsi']:.0f}\n"
+        f"  ⏳ 建议等回踩 **{entry_lo}～{entry_hi}** 附近再介入"
+    )
+
+
+def _ma5_hug_watch_line(r: dict) -> str:
+    """MA5贴线上攻候观区：沿MA5一路上攻，当前偏离过高等回踩，或大跌日不破MA5的强势股。"""
+    ind  = r["ind"]
+    info = r["info"]
+    close  = ind["close"]
+    ma5    = ind["ma5"]
+    ma20   = ind["ma20"]
+    dev_ma5  = (close - ma5)  / ma5  * 100
+    dev_ma20 = (close - ma20) / ma20 * 100
+    entry = round(ma5 * 1.005, 2)   # 贴MA5买入参考：MA5 + 0.5%
+    tag = r.get("ma5_hug_tag", "")
+    tag_str = "  🛡️ 大跌日护盘" if tag == "resilient" else ""
+    ma5_slope = r.get("ma5_slope_5d", 0)
+    return (
+        f"🚀 **{info['name']}**（{r['code']}）｜{info.get('signal_3d','—')} "
+        f"{info.get('theme','')}  [{info.get('pool','')}]{tag_str}\n"
+        f"  MA5贴线上攻：近15日站MA5 {r.get('above_count',0)}/15天  MA5近5日涨幅{ma5_slope:+.1f}%\n"
+        f"  当前价 **{close:.2f}**  偏MA5 **{dev_ma5:+.1f}%**  偏MA20 {dev_ma20:+.1f}%  RSI={ind['rsi']:.0f}\n"
+        f"  ⏳ 回踩 MA5({ma5:.2f}) 附近 ≤**{entry}** 时介入"
+    )
+
+
+def _scan_ma5_hug(results: list[dict], index_chg_yesterday: float) -> list[dict]:
+    """
+    扫描两类MA5上攻形态并合并返回：
+    A. 持续贴MA5上攻（近15日站MA5≥11天 + MA5_5d涨≥1.5%）
+    B. 大盘单边大跌日（index_chg < -0.8%）中，MA5几乎未破的强势个股
+       条件：昨日大盘跌>0.8%，个股昨日偏MA5跌幅 < -0.5%（未真正破线）
+    """
+    import pandas as pd
+
+    found = {}  # code → entry
+
+    for r in results:
+        info_r = r["info"]
+        ind_r  = r["ind"]
+        df_r   = r.get("df")
+        if df_r is None:
+            continue
+        if info_r.get("pool") not in ("core", "candidate"):
+            continue
+        if info_r.get("signal_3d") not in ("★★★", "★★☆"):
+            continue
+
+        df2 = df_r.copy()
+        df2["ma5"]  = df2["close"].rolling(5).mean()
+        df2["ma20"] = df2["close"].rolling(20).mean()
+        df2["ma60"] = df2["close"].rolling(60).mean()
+        df2["dev_ma5"] = (df2["close"] - df2["ma5"]) / df2["ma5"] * 100
+        df2 = df2.dropna()
+        if len(df2) < 15:
+            continue
+
+        tail15 = df2.tail(15)
+        above_count  = int(tail15["close"].gt(tail15["ma5"]).sum())
+        dev_min      = float(tail15["dev_ma5"].min())
+        dev_now      = float(df2["dev_ma5"].iloc[-1])
+        ma5_now      = float(df2["ma5"].iloc[-1])
+        ma60_slope   = float(df2["ma60"].iloc[-1] / df2["ma60"].iloc[-5] - 1) * 100
+        ma5_slope_5d = float(df2["ma5"].iloc[-1] / df2["ma5"].iloc[-5] - 1) * 100
+
+        # ── A. 持续贴线上攻 ──
+        is_hug = (
+            above_count >= 11 and
+            ma5_slope_5d >= 1.5 and
+            0 <= dev_now <= 15 and
+            dev_min >= -2.0 and
+            ma60_slope >= 0
+        )
+
+        # ── B. 大跌日不破MA5的强势股 ──
+        is_resilient = False
+        if index_chg_yesterday < -0.8 and len(df2) >= 2:
+            # 昨日（倒数第2行，今日为最新行）
+            yesterday_row = df2.iloc[-2]
+            yesterday_dev = float(yesterday_row["dev_ma5"])
+            yesterday_chg = float(
+                (yesterday_row["close"] - df2.iloc[-3]["close"]) / df2.iloc[-3]["close"] * 100
+            ) if len(df2) >= 3 else 0
+            is_resilient = (
+                yesterday_dev >= -0.5 and        # 昨日未破MA5（允许轻贴-0.5%以内）
+                yesterday_chg > index_chg_yesterday + 0.5 and  # 显著跑赢大盘
+                ma60_slope >= 0                  # 大趋势向上
+            )
+
+        if not (is_hug or is_resilient):
+            continue
+
+        # 当前偏离MA5 > 15% 说明今日大涨后过热，不重复（等后续自然回踩）
+        if dev_now > 15:
+            continue
+
+        tag = "resilient" if (is_resilient and not is_hug) else "hug"
+        found[r["code"]] = {
+            **r,
+            "above_count":   above_count,
+            "ma5_slope_5d":  round(ma5_slope_5d, 2),
+            "dev_now":       round(dev_now, 2),
+            "ma5_hug_tag":   tag,
+        }
+
+    return sorted(found.values(), key=lambda x: (
+        x["info"].get("pool") != "core",
+        x["info"].get("signal_3d") != "★★★",
+        -x["ma5_slope_5d"],
+    ))
+
+
 def _is_coiling(r: dict) -> bool:
     """蓄势待发：中期结构健康（MA60向上、价格站稳MA20、RSI未过热），但缺短期确认信号。"""
     ind = r.get("ind", {})
@@ -1427,7 +1557,10 @@ def _coiling_line(r: dict) -> str:
 
 def build_card(results: list[dict], regime: str, ts: str,
                ctx: dict | None = None, reversals: list[dict] | None = None,
-               overheat_map: dict[str, dict] | None = None) -> dict:
+               overheat_map: dict[str, dict] | None = None,
+               triple_watch: list[dict] | None = None,
+               ma5_hug_watch: list[dict] | None = None) -> list[dict]:
+    """返回卡片列表：[卡片1-操作信号, 卡片2-候观雷达]"""
     color       = REGIME_COLOR.get(regime, "blue")
     regime_desc = REGIME_LABEL.get(regime, regime)
     max_pos     = REGIME_STOCK_MAX.get(regime, 0)
@@ -1603,50 +1736,97 @@ def build_card(results: list[dict], regime: str, ts: str,
         elements.append({"tag": "div", "text": {"tag": "lark_md",
                                                   "content": "暂无有效信号"}})
 
-    # ── 底部反转候选 ────────────────────────────────────────────────────
-    if reversals:
-        rev_body = "\n\n".join(_reversal_line(r) for r in reversals)
-        elements += [
-            {"tag": "div", "text": {"tag": "lark_md",
-                                     "content": f"**🔄 ━━ 底部反转候选（MACD/Boll/周月K多维确认）━━**\n{rev_body}"}},
-            {"tag": "hr"},
-        ]
-
     elements.append({
         "tag": "note",
         "elements": [{"tag": "plain_text",
-                      "content": "个股池择时 ｜ 止损触及须当日执行 ｜ 单股仓位≤集群上限 ｜ 反转候选仅供参考，需等日线信号确认"}],
+                      "content": "个股池择时 ｜ 止损触及须当日执行 ｜ 单股仓位≤集群上限"}],
     })
 
-    return {
+    card1 = {
         "msg_type": "interactive",
         "card": {
             "header": {
                 "title": {"tag": "plain_text",
-                           "content": f"📊 个股研究池择时 ｜ {ts}"},
+                           "content": f"📊 个股择时·操作信号 ｜ {ts}"},
                 "template": color,
             },
             "elements": elements,
         },
     }
 
+    # ── 卡片2：候观雷达 ───────────────────────────────────────────────────
+    el2: list[dict] = []
+
+    # 标题说明
+    el2.append({"tag": "div", "text": {"tag": "lark_md",
+        "content": f"**🔭 候观雷达 ｜ {regime_desc} ｜ {ts}**\n强势股尚未回踩 / 底部待确认，等信号再上车"}})
+    el2.append({"tag": "hr"})
+
+    # ── 三线共振候观区 + MA5贴线上攻候观区 ──────────────────────────────
+    watch_lines = []
+    if triple_watch:
+        watch_lines += [_triple_align_watch_line(r) for r in triple_watch]
+    if ma5_hug_watch:
+        watch_lines += [_ma5_hug_watch_line(r) for r in ma5_hug_watch]
+    if watch_lines:
+        el2 += [
+            {"tag": "div", "text": {"tag": "lark_md",
+                                     "content": "**📌 ━━ 强势股候观区（等回踩再买）━━**\n" + "\n\n".join(watch_lines)}},
+            {"tag": "hr"},
+        ]
+
+    # ── 底部反转候选 ────────────────────────────────────────────────────
+    if reversals:
+        rev_body = "\n\n".join(_reversal_line(r) for r in reversals)
+        el2 += [
+            {"tag": "div", "text": {"tag": "lark_md",
+                                     "content": f"**🔄 ━━ 底部反转候选（MACD/Boll/周月K多维确认）━━**\n{rev_body}"}},
+            {"tag": "hr"},
+        ]
+
+    if not watch_lines and not reversals:
+        el2.append({"tag": "div", "text": {"tag": "lark_md", "content": "暂无候观/反转标的"}})
+
+    el2.append({
+        "tag": "note",
+        "elements": [{"tag": "plain_text",
+                      "content": "候观区仅供参考，需等日线信号确认后再介入 ｜ 反转候选须等量价验证"}],
+    })
+
+    card2 = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {"tag": "plain_text",
+                           "content": f"🔭 候观雷达·强势股跟踪 ｜ {ts}"},
+                "template": "wathet",
+            },
+            "elements": el2,
+        },
+    }
+
+    return [card1, card2]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 推送
 # ─────────────────────────────────────────────────────────────────────────────
-def push_feishu(card: dict, dry: bool = False) -> None:
+def push_feishu(cards: list[dict] | dict, dry: bool = False) -> None:
+    if isinstance(cards, dict):
+        cards = [cards]
     if dry:
         import pprint
-        log.info("[dry-run] 卡片预览（前 3000 字）:")
-        pprint.pprint(card, width=120)
-        for el in card["card"]["elements"]:
-            if el.get("tag") == "div":
-                txt = el.get("text", {}).get("content", "")
-                if txt:
-                    print(txt[:400])
-                    print()
+        for i, card in enumerate(cards, 1):
+            log.info(f"[dry-run] 卡片{i} 预览:")
+            for el in card["card"]["elements"]:
+                if el.get("tag") == "div":
+                    txt = el.get("text", {}).get("content", "")
+                    if txt:
+                        print(txt[:400])
+                        print()
         return
-    _post_card(card, FEISHU_WEBHOOKS)
+    for card in cards:
+        _post_card(card, FEISHU_WEBHOOKS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1811,6 +1991,7 @@ def main(dry: bool = False, force: bool = False) -> None:
             "stop_price":   stop,
             "reasons":      reasons,
             "ind":          ind,
+            "df":           df,
         })
         log.info(
             f"  {code} {info['name']:6s}  "
@@ -1868,7 +2049,56 @@ def main(dry: bool = False, force: bool = False) -> None:
     reversals.sort(key=lambda r: -r["rev_pts"])
     log.info(f"底部反转候选: {len(reversals)} 只 — {[r['name'] for r in reversals]}")
 
-    card = build_card(results, regime, ts, ctx=ctx, reversals=reversals, overheat_map=overheat_map)
+    # ── 三线共振候观区：core/★★★ 日+周+月三线共振，当前偏离MA20>5% 暂不买 ──
+    triple_watch: list[dict] = []
+    for r in results:
+        info_r = r["info"]
+        ind_r  = r["ind"]
+        if info_r.get("pool") != "core":
+            continue
+        if info_r.get("signal_3d") != "★★★":
+            continue
+        if r["signal"] not in ("HOLD", "BUY_WATCH"):
+            continue
+        df_r = r.get("df")
+        if df_r is None:
+            continue
+        wk_r = _weekly_macd_state(df_r)
+        mk_r = _monthly_trend_state(df_r)
+        day_align  = ind_r.get("pre_golden_cross", False) or ind_r.get("cross") == "golden"
+        week_align = wk_r.get("golden", False) and wk_r.get("above_zero", False)
+        month_align = mk_r.get("ma3_rising", False) and (mk_r.get("above_ma6", False) or mk_r.get("dif_positive", False))
+        if not (day_align and week_align and month_align):
+            continue
+        close_r = ind_r["close"]
+        ma20_r  = ind_r.get("ma20", 0)
+        dev = (close_r - ma20_r) / ma20_r * 100 if ma20_r else 0
+        # 偏离MA20 > 5% 说明短期偏高，作为候观提示；已回踩则直接产生BUY信号，不重复
+        if dev > 5:
+            triple_watch.append({**r, "wk": wk_r, "mk": mk_r})
+            log.info(f"  三线共振候观: {r['name']} 偏MA20={dev:+.1f}% 等回踩")
+
+    log.info(f"三线共振候观: {len(triple_watch)} 只 — {[r['name'] for r in triple_watch]}")
+
+    # ── MA5贴线上攻 + 大跌日护盘强势股扫描 ──
+    from data_fetcher import get_index_prices
+    index_chg_yesterday = 0.0
+    try:
+        idx_df = get_index_prices("000300", 5)
+        if idx_df is not None and len(idx_df) >= 2:
+            c0 = float(idx_df["close"].iloc[-2])
+            c1 = float(idx_df["close"].iloc[-3])
+            index_chg_yesterday = (c0 - c1) / c1 * 100
+    except Exception:
+        pass
+    log.info(f"昨日沪深300涨跌: {index_chg_yesterday:+.2f}%")
+
+    ma5_hug_watch = _scan_ma5_hug(results, index_chg_yesterday)
+    log.info(f"MA5上攻候观: {len(ma5_hug_watch)} 只 — {[r['name'] for r in ma5_hug_watch]}")
+
+    card = build_card(results, regime, ts, ctx=ctx, reversals=reversals,
+                      overheat_map=overheat_map, triple_watch=triple_watch,
+                      ma5_hug_watch=ma5_hug_watch)
     push_feishu(card, dry=dry)
 
     snap = _DIR / "logs" / f"stock_timing_{today}.json"
