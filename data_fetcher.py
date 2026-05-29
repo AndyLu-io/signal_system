@@ -76,6 +76,7 @@ def _tencent_kline(symbol: str, count: int = 45) -> Optional[list]:
     腾讯财经日K线接口（完全无代理问题）
     symbol 示例: sz159326 / sh000300
     返回 list of [日期, 开, 收, 高, 低, 成交量(手)]
+    失败时自动尝试新浪财经作为备用源。
     """
     url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
            f"?_var=kline_dayqfq&param={symbol},day,,,{count},qfq")
@@ -89,7 +90,30 @@ def _tencent_kline(symbol: str, count: int = 45) -> Optional[list]:
     try:
         return _retry(_fetch)
     except Exception as e:
-        logger.warning(f"腾讯K线 {symbol} 三次均失败: {e}")
+        logger.warning(f"腾讯K线 {symbol} 三次均失败: {e}，尝试新浪备用源")
+
+    # ── Fallback: 新浪财经K线 ─────────────────────────────────────────────
+    try:
+        sina_url = (
+            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={count}"
+        )
+        r = requests.get(sina_url, timeout=10)
+        r.raise_for_status()
+        sina_data = json.loads(r.text)
+        if not sina_data:
+            return None
+        result = []
+        for item in sina_data:
+            result.append([
+                item["day"][:10],
+                item["open"], item["close"], item["high"], item["low"],
+                str(int(float(item.get("volume", 0)))),
+            ])
+        logger.info(f"新浪备用源 {symbol} 成功: {len(result)} 条")
+        return result
+    except Exception as e2:
+        logger.warning(f"新浪备用源 {symbol} 也失败: {e2}")
         return None
 
 

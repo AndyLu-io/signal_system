@@ -449,6 +449,11 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
         and ind.get("consec_down_days", 0) >= 2):
         score += 1; reasons.append("回踩MA5/MA20支撑确认✅")
 
+    # 板块ETF联动验证：板块当日跌>1%时个股买入信号不可信
+    cluster_etf_chg = ind.get("cluster_etf_chg")
+    if cluster_etf_chg is not None and cluster_etf_chg < -1.0:
+        score -= 2; reasons.append(f"板块ETF今跌{cluster_etf_chg:.1f}%，逆板块风险")
+
     return score, reasons
 
 
@@ -1718,6 +1723,15 @@ def build_card(results: list[dict], regime: str, ts: str,
                 {"tag": "hr"},
             ]
 
+    # ── 跨模块方向暴露预警 ─────────────────────────────────────────────────
+    _exp_warns = (ctx or {}).get("exposure_warnings", [])
+    if _exp_warns:
+        _ew_text = "**🚨 方向集中度预警（个股+ETF合计）**\n" + "\n".join(_exp_warns)
+        elements += [
+            {"tag": "div", "text": {"tag": "lark_md", "content": _ew_text}},
+            {"tag": "hr"},
+        ]
+
     # ── 集群过热警告 ──────────────────────────────────────────────────────
     if overheat_map:
         oh_text = _fmt_theme_overheat_section(overheat_map)
@@ -1890,6 +1904,50 @@ def main(dry: bool = False, force: bool = False) -> None:
         log.info("今日非交易日，退出")
         return
 
+    # ── 尾盘买点次日验证（仅首次运行09:45触发）────────────────────────────
+    _now_hour = datetime.now().hour
+    if _now_hour < 10:
+        try:
+            from datetime import timedelta as _td
+            for _back in range(1, 4):
+                _prev_d = (date.today() - _td(days=_back)).strftime("%Y%m%d")
+                _tail_file = _DIR / "logs" / f"tail_detail_{_prev_d}.json"
+                if _tail_file.exists():
+                    _tail_data = json.loads(_tail_file.read_text(encoding="utf-8"))
+                    _tail_sigs = _tail_data.get("signals", [])
+                    if not _tail_sigs:
+                        break
+                    _tail_codes = [str(s.get("code", "")) for s in _tail_sigs if s.get("stars", 0) >= 2]
+                    if _tail_codes:
+                        log.info(f"尾盘验证: 检查{len(_tail_codes)}只昨日推荐标的开盘表现")
+                        _tail_klines = fetch_klines_parallel(_tail_codes, count=5, max_workers=5)
+                        _bad_opens: list[str] = []
+                        for _tc in _tail_codes:
+                            _tdf = _tail_klines.get(_tc)
+                            if _tdf is not None and len(_tdf) >= 2:
+                                _prev_close = float(_tdf["close"].iloc[-2])
+                                _today_open = float(_tdf["open"].iloc[-1])
+                                _gap = (_today_open / _prev_close - 1) * 100
+                                if _gap < -1.5:
+                                    _tname = next((s.get("name", _tc) for s in _tail_sigs if str(s.get("code")) == _tc), _tc)
+                                    _bad_opens.append(f"{_tname}({_tc}) 低开{_gap:.1f}%")
+                                    log.warning(f"  尾盘验证: {_tname} 今日低开{_gap:.1f}%")
+                        if _bad_opens:
+                            _alert_card = {
+                                "msg_type": "interactive",
+                                "card": {
+                                    "header": {"title": {"tag": "plain_text",
+                                        "content": f"⚠️ 昨日尾盘买点次日验证 ｜ {ts}"}, "template": "red"},
+                                    "elements": [{"tag": "div", "text": {"tag": "lark_md",
+                                        "content": "**昨日尾盘推荐标的今日低开预警**\n" + "\n".join(f"🔴 {b}" for b in _bad_opens)
+                                        + "\n\n建议：低开>1.5%属于追尾失败，考虑早盘止损或等反抽减仓"}}],
+                                },
+                            }
+                            _post_card(_alert_card, FEISHU_WEBHOOKS)
+                    break
+        except Exception as e:
+            log.debug(f"尾盘验证异常: {e}")
+
     regime = current_regime()
     log.info(f"机制: {regime}")
 
@@ -1948,6 +2006,20 @@ def main(dry: bool = False, force: bool = False) -> None:
             continue
 
         ind["main_force_flow"] = stock_flows.get(code, 0.0)
+
+        # 注入板块ETF今日涨跌幅（用于板块联动验证）
+        _cluster = info.get("cluster", "")
+        _proxy_sym = _CLUSTER_PROXY_ETF.get(_cluster, "")
+        _sec_snaps = ctx.get("sector_snaps", {})
+        _cluster_chg = None
+        if _proxy_sym:
+            for _sn, _snap in _sec_snaps.items():
+                if _SECTOR_ETFS.get(_sn) == _proxy_sym:
+                    _cluster_chg = _snap.get("chg_pct")
+                    break
+            if _cluster_chg is None and _proxy_sym in kline_chg_pcts:
+                _cluster_chg = kline_chg_pcts.get(_proxy_sym[2:])
+        ind["cluster_etf_chg"] = _cluster_chg
 
         # 底部反转候选检测（传入info/ctx以启用政策+情绪维度）
         rev = check_reversal(ind, df, info=info, ctx=ctx)
@@ -2127,6 +2199,39 @@ def main(dry: bool = False, force: bool = False) -> None:
             r["reasons"].append(f"同链({cluster})已有{_MAX_BUY_PER_CLUSTER}只买入，集中度降级")
             log.info(f"  集中度限制: {r['name']} {cluster} → HOLD（同链已满）")
 
+    # ── 跨模块方向暴露预警 ─────────────────────────────────────────────────
+    exposure_warnings: list[str] = []
+    try:
+        _today_str = date.today().strftime("%Y%m%d")
+        _etf_sig_file = _DIR / "logs" / f"signal_detail_{_today_str}.json"
+        _cross_exposure: dict[str, float] = {}
+
+        # 统计本模块买入信号的cluster仓位
+        for r in results:
+            if r["signal"] in ("BUY_STRONG", "BUY_WATCH"):
+                c = r["info"].get("cluster", "")
+                if c:
+                    _cross_exposure[c] = _cross_exposure.get(c, 0) + r["position_pct"]
+
+        # 叠加ETF系统今日买入信号的cluster仓位
+        if _etf_sig_file.exists():
+            _etf_data = json.loads(_etf_sig_file.read_text(encoding="utf-8"))
+            for sig in _etf_data.get("signals", []):
+                if sig.get("signal") in ("BUY_STRONG", "BUY_WATCH"):
+                    from config import ETF_UNIVERSE
+                    etf_info = ETF_UNIVERSE.get(str(sig.get("code", "")), {})
+                    c = etf_info.get("cluster", "")
+                    w = sig.get("weight_pct", 0) or 0
+                    if c and w > 0:
+                        _cross_exposure[c] = _cross_exposure.get(c, 0) + w
+
+        for c, total in _cross_exposure.items():
+            if total > 25:
+                exposure_warnings.append(f"⚠️ {c} 合计仓位{total:.0f}%（个股+ETF），超25%集中度上限")
+                log.warning(f"方向暴露: {c} = {total:.0f}%")
+    except Exception as e:
+        log.debug(f"跨模块暴露检查: {e}")
+
     reversals.sort(key=lambda r: -r["rev_pts"])
     log.info(f"底部反转候选: {len(reversals)} 只 — {[r['name'] for r in reversals]}")
 
@@ -2176,6 +2281,9 @@ def main(dry: bool = False, force: bool = False) -> None:
 
     ma5_hug_watch = _scan_ma5_hug(results, index_chg_yesterday)
     log.info(f"MA5上攻候观: {len(ma5_hug_watch)} 只 — {[r['name'] for r in ma5_hug_watch]}")
+
+    if exposure_warnings:
+        ctx["exposure_warnings"] = exposure_warnings
 
     card = build_card(results, regime, ts, ctx=ctx, reversals=reversals,
                       overheat_map=overheat_map, triple_watch=triple_watch,

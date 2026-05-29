@@ -238,6 +238,17 @@ def calc_composite_scores(
         f_flow     = flow_scores.get(code, 50.0)
         f_liquidity = liquidity_scores.get(code, 40.0)
 
+        # RSI>70时动量因子打5折（防追高，回测:BUY_STRONG追高样本均RSI68-76）
+        df_rsi = etf_prices.get(code)
+        if df_rsi is not None and len(df_rsi) >= 16:
+            _closes = df_rsi["close"].values[-15:]
+            _delta = np.diff(_closes)
+            _gain = np.mean(_delta[_delta > 0]) if np.any(_delta > 0) else 0
+            _loss = -np.mean(_delta[_delta < 0]) if np.any(_delta < 0) else 1e-9
+            _rsi = 100 - 100 / (1 + _gain / max(_loss, 1e-9))
+            if _rsi > 70:
+                f_momentum *= 0.5
+
         composite = round(
             f_policy   * weights["f_policy"]   +
             f_momentum * weights["f_momentum"] +

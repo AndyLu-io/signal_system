@@ -1117,10 +1117,45 @@ def run() -> None:
     logger.info(f"指数回踩低吸: {len(pullbacks)} 只 — {[p.name for p in pullbacks]}")
     logger.info(f"指数趋势加仓: {len(trend_adds)} 只 — {[t.name for t in trend_adds]}")
 
-    # ── 推送飞书 ─────────────────────────────────────────────────
-    card = build_card(timings, today_str, regime, time_str, reversals=reversals,
-                      pullbacks=pullbacks, trend_adds=trend_adds)
-    send_to_feishu(card)
+    # ── 推送飞书（仅信号变化 或 关键时点推送）──────────────────────
+    current_signals = {t.code: t.signal for t in timings}
+    should_push = False
+
+    # 关键时点必推（开盘/午盘/尾盘各一次）
+    _KEY_TIMES = {"09:25", "09:30", "09:35", "11:25", "11:30", "14:25", "14:30", "14:45", "14:50"}
+    if time_str in _KEY_TIMES:
+        should_push = True
+        logger.info(f"关键时点 {time_str}，必推")
+
+    # 对比上一次运行的信号，有变化则推
+    if not should_push:
+        snap_file_check = LOG_DIR / f"index_timing_{today_str}.json"
+        if snap_file_check.exists():
+            try:
+                prev_data = json.loads(snap_file_check.read_text(encoding="utf-8"))
+                prev_runs = prev_data.get("runs", [])
+                if prev_runs:
+                    last_run = prev_runs[-1]
+                    prev_signals = {e["code"]: e["signal"] for e in last_run.get("etfs", [])}
+                    changed = [code for code, sig in current_signals.items()
+                               if prev_signals.get(code) != sig]
+                    if changed:
+                        should_push = True
+                        changed_names = [next((t.name for t in timings if t.code == c), c) for c in changed[:3]]
+                        logger.info(f"信号变化: {', '.join(changed_names)} 等{len(changed)}只，推送")
+                    else:
+                        logger.info("信号无变化，跳过推送")
+                else:
+                    should_push = True  # 今天首次
+            except Exception:
+                should_push = True
+        else:
+            should_push = True  # 今天首次
+
+    if should_push:
+        card = build_card(timings, today_str, regime, time_str, reversals=reversals,
+                          pullbacks=pullbacks, trend_adds=trend_adds)
+        send_to_feishu(card)
 
     # ── 保存快照 ─────────────────────────────────────────────────
     snapshot = {

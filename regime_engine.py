@@ -205,6 +205,25 @@ def calculate_regime_score(
            s4 * w["s4_rotation"] + s5 * w["s5_margin"] + s6 * w["s6_vol"])
     score = round(raw * 10, 1)  # 转为 0-100 分
 
+    # ── 极端事件快速降级：单日暴跌直接压入R4区间 ──────────────────────────
+    extreme_event = False
+    if csi300 is not None and len(csi300) >= 2:
+        _c_prev = float(csi300["close"].values[-2])
+        _c_now = float(csi300["close"].values[-1])
+        _day_chg = (_c_now / _c_prev - 1) * 100 if _c_prev > 0 else 0
+        if _day_chg < -3.0:
+            score = min(score, 25.0)
+            extreme_event = True
+            logger.warning(f"极端事件: 沪深300单日跌{_day_chg:.1f}%，强制降级R4")
+    if not extreme_event and csi500 is not None and len(csi500) >= 2:
+        _c5_prev = float(csi500["close"].values[-2])
+        _c5_now = float(csi500["close"].values[-1])
+        _day_chg5 = (_c5_now / _c5_prev - 1) * 100 if _c5_prev > 0 else 0
+        if _day_chg5 < -4.0:
+            score = min(score, 25.0)
+            extreme_event = True
+            logger.warning(f"极端事件: 中证500单日跌{_day_chg5:.1f}%，强制降级R4")
+
     breakdown = {
         "s1_trend": round(s1, 1),
         "s2_volume": round(s2, 1),
