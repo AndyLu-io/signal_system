@@ -409,6 +409,12 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
     elif flow < -0.5:
         score -= 1; reasons.append(f"主力净流出{abs(flow):.1f}亿")
 
+    # 量价背离：新高+缩量+主力流出 → 顶部信号
+    vr = ind["vol_ratio"]
+    consec_up = ind.get("consec_up_days", 0)
+    if (close > ma5 and consec_up >= 2 and vr < 0.7 and flow < -0.3):
+        score -= 1; reasons.append(f"量价背离(新高缩量{vr:.1f}x+主力流出{abs(flow):.1f}亿)")
+
     # 偏离MA20（追高风险，阈值比ETF系统宽松以适应个股波动）
     dev_ma20 = (close - ma20) / ma20 * 100
     if dev_ma20 >= 20:
@@ -426,6 +432,22 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
     # RSI+连涨联合惩罚（回测: BUY_STRONG追高样本RSI均68-76）
     if rsi > 65 and consec_up >= 3:
         score -= 1; reasons.append(f"RSI{rsi:.0f}+连涨{consec_up}日，动量衰减风险")
+
+    # MACD红柱连续缩短（趋势疲劳，追高风险）
+    bar_now = ind.get("macd_bar", 0)
+    bar_prev = ind.get("macd_bar_p", 0)
+    if bar_now > 0 and bar_prev > 0 and bar_now < bar_prev * 0.85:
+        if rsi > 60:
+            score -= 1; reasons.append(f"红柱缩短({bar_prev:.3f}→{bar_now:.3f})+RSI偏高，动量衰竭")
+
+    # 回踩确认加分：价格从高位回踩至MA5/MA20附近获得支撑
+    boll_pct = ind.get("boll_pct", 0.5)
+    if (0.25 <= boll_pct <= 0.55
+        and close <= ma5 * 1.02
+        and close >= ma20 * 0.98
+        and ind.get("ma60_slope_5d", 0) > 0.2
+        and ind.get("consec_down_days", 0) >= 2):
+        score += 1; reasons.append("回踩MA5/MA20支撑确认✅")
 
     return score, reasons
 
@@ -686,7 +708,11 @@ def check_reversal(
     elif vr >= 1.2:
         pts += 1; dim_vol += 1; details.append(f"量价配合(量比{vr:.1f}x)")
 
-    if pts < 9:              # 至少9分入选；4个新增硬门槛(MA60slope/close/MA60/f_earnings≥60)已把通威等结构性下跌股拦住
+    # 情绪冰点时降低反转门槛：COLD=最佳逆向窗口，7分即入选
+    _senti_ctx = (ctx or {}).get("sentiment")
+    _senti_level = getattr(_senti_ctx, "level", "NORMAL") if _senti_ctx else "NORMAL"
+    _rev_threshold = 7 if _senti_level == "COLD" else 9
+    if pts < _rev_threshold:
         return None
 
     return {
@@ -2082,6 +2108,24 @@ def main(dry: bool = False, force: bool = False) -> None:
     danger_count = sum(1 for v in overheat_map.values() if v["level"] == "DANGER")
     caution_count = sum(1 for v in overheat_map.values() if v["level"] == "CAUTION")
     log.info(f"集群过热: DANGER={danger_count} CAUTION={caution_count} SAFE={len(overheat_map)-danger_count-caution_count}")
+
+    # ── 同产业链集中度限制：同一cluster最多2只BUY信号同时存在 ──────────────────
+    _MAX_BUY_PER_CLUSTER = 2
+    cluster_buys: dict[str, list[dict]] = {}
+    for r in results:
+        if r["signal"] in ("BUY_STRONG", "BUY_WATCH"):
+            c = r["info"].get("cluster", "")
+            if c:
+                cluster_buys.setdefault(c, []).append(r)
+    for cluster, buys in cluster_buys.items():
+        if len(buys) <= _MAX_BUY_PER_CLUSTER:
+            continue
+        buys.sort(key=lambda x: -x["score"])
+        for r in buys[_MAX_BUY_PER_CLUSTER:]:
+            r["signal"] = "HOLD"
+            r["position_pct"] = 0
+            r["reasons"].append(f"同链({cluster})已有{_MAX_BUY_PER_CLUSTER}只买入，集中度降级")
+            log.info(f"  集中度限制: {r['name']} {cluster} → HOLD（同链已满）")
 
     reversals.sort(key=lambda r: -r["rev_pts"])
     log.info(f"底部反转候选: {len(reversals)} 只 — {[r['name'] for r in reversals]}")

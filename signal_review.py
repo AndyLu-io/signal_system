@@ -237,6 +237,22 @@ def extract_etf_signals(from_date: str, to_date: str) -> list[SignalRecord]:
 def extract_stock_signals(from_date: str, to_date: str) -> list[SignalRecord]:
     records: list[SignalRecord] = []
 
+    # Load regime state (single file, represents latest state; use as approximation)
+    _state_file = _ROOT / "state" / "regime_state.json"
+    _regime_by_date: dict[str, str] = {}
+    # Try to infer regime per-date from ETF signal_detail files
+    for path in sorted(_LOG_DIR.glob("signal_detail_*.json")):
+        raw = path.stem.replace("signal_detail_", "")
+        dfmt = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            _regime_by_date[dfmt] = d.get("regime", "")
+            senti = (d.get("sentiment") or {}).get("level", "")
+            if senti:
+                _regime_by_date[f"{dfmt}_senti"] = senti
+        except Exception:
+            pass
+
     for path in sorted(_LOG_DIR.glob("stock_timing_*.json")):
         date_str = path.stem.replace("stock_timing_", "")       # YYYY-MM-DD
         if date_str < from_date or date_str > to_date:
@@ -249,6 +265,9 @@ def extract_stock_signals(from_date: str, to_date: str) -> list[SignalRecord]:
         except Exception as e:
             logger.warning(f"读取 {path.name} 失败: {e}")
             continue
+
+        regime_val = _regime_by_date.get(date_str) or None
+        senti_val = _regime_by_date.get(f"{date_str}_senti") or None
 
         for item in items:
             raw_code = str(item.get("code", ""))
@@ -266,6 +285,8 @@ def extract_stock_signals(from_date: str, to_date: str) -> list[SignalRecord]:
                 name=item.get("name", ""),
                 signal=item.get("signal", ""),
                 score=item.get("score"),
+                regime=regime_val,
+                sentiment_level=senti_val,
                 position_pct=item.get("position_pct"),
                 stop_loss_pct=stop_pct,
                 pool=item.get("pool"),
@@ -670,6 +691,36 @@ def generate_stock_section(records: list[SignalRecord], month_tag: str) -> str:
     _table(by_signal, "按信号类型")
     _table(by_3d,     "按 signal_3d 三维评级")
     _table(by_theme,  "按主题")
+
+    by_cluster = compute_stats(records, "cluster")
+    _table(by_cluster, "按集群(cluster)")
+
+    # 交叉分析：买入信号在不同情绪/机制下的表现
+    buy_recs = [r for r in records if r.signal in ("BUY_STRONG", "BUY_WATCH")]
+    if buy_recs:
+        lines.append("#### 买入信号 × 情绪交叉\n")
+        by_senti = compute_stats(buy_recs, "sentiment_level")
+        if by_senti:
+            lines.append("| 情绪 | 样本 | 完整 | 胜率T+5 | 均收T+5 | 超额T+5 |")
+            lines.append("|------|------|------|---------|---------|---------|")
+            for s in by_senti:
+                lines.append(
+                    f"| {s['group']} | {s['samples']} | {s['complete']} "
+                    f"| {_rate(s['win_5d'])} | {_pct(s['avg_5d'])} | {_pct(s['avg_excess_5d'])} |"
+                )
+        lines.append("")
+
+        lines.append("#### 买入信号 × 机制交叉\n")
+        by_regime = compute_stats(buy_recs, "regime")
+        if by_regime:
+            lines.append("| 机制 | 样本 | 完整 | 胜率T+5 | 均收T+5 | 超额T+5 |")
+            lines.append("|------|------|------|---------|---------|---------|")
+            for s in by_regime:
+                lines.append(
+                    f"| {s['group']} | {s['samples']} | {s['complete']} "
+                    f"| {_rate(s['win_5d'])} | {_pct(s['avg_5d'])} | {_pct(s['avg_excess_5d'])} |"
+                )
+        lines.append("")
 
     return "\n".join(lines)
 
