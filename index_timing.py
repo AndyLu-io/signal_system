@@ -476,6 +476,7 @@ def calc_index_timing(
     csi300_closes: Optional[np.ndarray],
     macro_score: float,
     macro_label: str,
+    regime: str = "R2",
 ) -> Optional[IndexTiming]:
     if df is None or len(df) < 22:
         logger.warning(f"{code} 数据不足，跳过")
@@ -488,9 +489,16 @@ def calc_index_timing(
     m_score, m_label, m_details = _score_momentum(closes, csi300_closes)
     v_score, v_label             = _score_volume(amounts, closes)
 
-    composite = round(
-        0.35 * t_score + 0.25 * m_score + 0.15 * v_score + 0.25 * macro_score, 1
-    )
+    # 按机制动态调整四维权重（R1追涨有效加动量，R4资金面决定一切加宏观）
+    _W = {
+        "R1": (0.30, 0.35, 0.10, 0.25),  # 趋势/动量/量能/宏观
+        "R2": (0.35, 0.25, 0.15, 0.25),
+        "R3": (0.30, 0.20, 0.15, 0.35),
+        "R4": (0.25, 0.15, 0.10, 0.50),
+    }
+    wt, wm, wv, wmacro = _W.get(regime, _W["R2"])
+
+    composite = round(wt * t_score + wm * m_score + wv * v_score + wmacro * macro_score, 1)
     # 宏观情绪过热门控：macro≥70(HOT)时不发STRONG_BUY，最高为BUY（上限71）
     if macro_score >= 70:
         composite = min(composite, 71.0)
@@ -1067,6 +1075,24 @@ def run() -> None:
     macro_score, macro_label = _score_macro(north_flow, margin, breadth)
     logger.info(f"宏观资金评分: {macro_score:.1f} — {macro_label}")
 
+    # 前瞻指标修正宏观评分（QVIX恐慌/铜金比/金油比地缘→拐点提前预警）
+    try:
+        import forward_indicators
+        fwd = forward_indicators.calc_forward_indicators()
+        _fwd_adj = 0.0
+        if getattr(fwd, "qvix_level", "") == "PANIC":    _fwd_adj -= 15
+        elif getattr(fwd, "qvix_level", "") == "HIGH":   _fwd_adj -= 10
+        elif getattr(fwd, "qvix_level", "") == "ELEVATED": _fwd_adj -= 5
+        if getattr(fwd, "cg_trend", "") == "RISK_OFF":   _fwd_adj -= 10
+        elif getattr(fwd, "cg_trend", "") == "RISK_ON":  _fwd_adj += 5
+        if getattr(fwd, "gold_oil_signal", "") == "GEOPOLITICAL_RISK": _fwd_adj -= 10
+        _fwd_adj = max(-20, min(20, _fwd_adj))
+        if abs(_fwd_adj) >= 5:
+            macro_score = max(0, min(100, macro_score + _fwd_adj))
+            logger.info(f"前瞻修正宏观: adj={_fwd_adj:+.0f} → {macro_score:.1f}")
+    except Exception as e:
+        logger.debug(f"前瞻指标获取失败(指数择时): {e}")
+
     # ── 各ETF评分 ────────────────────────────────────────────────
     regime = _read_regime()
     timings:   list[IndexTiming] = []
@@ -1081,7 +1107,7 @@ def run() -> None:
 
         t = calc_index_timing(
             code, info, etf_dfs.get(code),
-            benchmark, m_score, m_label,
+            benchmark, m_score, m_label, regime=regime,
         )
         if t:
             timings.append(t)
@@ -1110,6 +1136,14 @@ def run() -> None:
 
     reversals.sort(key=lambda r: -r["rev"]["rev_pts"])
     logger.info(f"ETF底部反转候选: {len(reversals)} 只 — {[r['timing'].name for r in reversals]}")
+
+    # 按综合分排序，日志突出 Top3/Bottom3（聚焦最强最弱，减少信息过载）
+    timings.sort(key=lambda t: -t.composite)
+    if len(timings) >= 6:
+        _top3 = timings[:3]
+        _bot3 = timings[-3:]
+        logger.info(f"📈 最强3只: {', '.join(f'{t.name}({t.composite:.0f})' for t in _top3)}")
+        logger.info(f"📉 最弱3只: {', '.join(f'{t.name}({t.composite:.0f})' for t in _bot3)}")
 
     # ── 回踩低吸 + 趋势加仓扫描 ─────────────────────────────────
     pullbacks = scan_index_pullbacks(etf_dfs, timings)

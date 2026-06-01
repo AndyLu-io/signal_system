@@ -953,6 +953,70 @@ def build_forward_card(fwd: ForwardReading, run_date: str) -> dict:
         f"{dim_lines}"
     )
 
+    # ── 今日决策影响（一眼看懂"所以呢"）──
+    impact_lines = []
+    # regime 修正方向
+    _regime_adj = 0
+    if fwd.qvix_level == "PANIC": _regime_adj -= 8
+    elif fwd.qvix_level == "HIGH": _regime_adj -= 5
+    elif fwd.qvix_level == "ELEVATED": _regime_adj -= 2
+    elif fwd.qvix_level == "LOW": _regime_adj -= 3
+    if fwd.cg_trend == "RISK_OFF": _regime_adj -= 5
+    elif fwd.cg_trend == "RISK_ON": _regime_adj += 3
+    if fwd.gold_oil_signal == "GEOPOLITICAL_RISK": _regime_adj -= 5
+    _regime_adj = max(-10, min(10, _regime_adj))
+    if _regime_adj != 0:
+        direction = "偏防御⬇" if _regime_adj < 0 else "偏进攻⬆"
+        impact_lines.append(f"机制评分修正 **{_regime_adj:+.0f}分** → 系统{direction}")
+    # 行动建议（从底部提上来）
+    if fwd.astock_guidance:
+        impact_lines.append(f"**操作方向** → {fwd.astock_guidance}")
+    if not impact_lines:
+        impact_lines.append("前瞻信号中性，系统无额外修正")
+    _section("**🎯 今日系统影响**\n" + "\n".join(impact_lines))
+
+    # ── A股板块风向标（前瞻→板块翻译）──
+    sector_hints = []
+    # 美债利率区间
+    us10y_regime = getattr(fwd, "us10y_regime", "WATCH")
+    if us10y_regime == "TECH_FAVOR":
+        sector_hints.append("🟢 **科技/成长占优**〈日度〉：美债>4.4%利好半导体、AI算力、光模块")
+    elif us10y_regime == "DEFENSIVE":
+        sector_hints.append("🔴 **防御切换**〈日度〉：美债<4.3%资金回防，关注红利低波、公用事业、电力")
+    # 铜金比
+    cg = getattr(fwd, "cg_trend", "NEUTRAL")
+    if cg == "RISK_ON":
+        sector_hints.append("🟢 **周期进攻**〈周度〉：铜金比上行趋势，有色/铜矿/工程机械中期受益")
+    elif cg == "RISK_OFF":
+        sector_hints.append("🔴 **避险模式**〈周度〉：铜金比下行，中期回避周期股，黄金/国债/高股息占优")
+    # QVIX
+    ql = getattr(fwd, "qvix_level", "NORMAL")
+    if ql in ("PANIC", "HIGH"):
+        sector_hints.append("🔴 **全市场恐慌**〈日度〉：系统性缩仓，但强赛道恐慌日=逆向买入窗口")
+    elif ql == "LOW":
+        sector_hints.append("🟡 **低波自满**〈周度〉：市场平静但黑天鹅概率升高，控制新增仓位")
+    # BDI
+    bdi_sig = getattr(fwd, "bdi_signal", "NEUTRAL")
+    if bdi_sig == "STRONG":
+        sector_hints.append("🟢 **贸易活跃**〈中期1-2周〉：BDI强势，航运/出口链趋势向好（非日度信号）")
+    elif bdi_sig == "WEAK":
+        sector_hints.append("🟡 **贸易放缓**〈中期〉：BDI偏弱，出口链中期谨慎")
+    # 金油比地缘
+    go_sig = getattr(fwd, "gold_oil_signal", "NEUTRAL")
+    if go_sig == "GEOPOLITICAL_RISK":
+        sector_hints.append("🔴 **地缘避险**〈日度〉：金油比异动，军工/黄金受益，油气链承压")
+    # 美元
+    dxy_sig = getattr(fwd, "dxy_signal", "NEUTRAL")
+    if dxy_sig == "RISK_OFF":
+        sector_hints.append("🟡 **美元走强**〈周度〉：出口链汇率承压，内需消费相对受益")
+    elif dxy_sig == "RISK_ON":
+        sector_hints.append("🟢 **美元走弱**〈周度〉：新兴市场+出口链+有色受益")
+
+    if sector_hints:
+        _section("**📍 A股板块风向标**\n" + "\n".join(sector_hints))
+    else:
+        _section("**📍 A股板块风向标**\n⚪ 前瞻信号中性，无明显板块偏向，维持现有配置")
+
     # ── A. 波动 & 恐慌 ──
     vol_lines = ["**📡 波动 & 恐慌**"]
     if fwd.qvix is not None:
@@ -1044,11 +1108,23 @@ def build_forward_card(fwd: ForwardReading, run_date: str) -> dict:
     # ── 通俗总结 ──
     _section(f"**💡 宏观总结**\n{fwd.summary}")
 
-    # ── A股操作建议 ──
-    elements.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": f"**🎯 A股操作方向**\n{fwd.astock_guidance}"},
-    })
+    # ── 数据健康状态（标注获取失败的指标，不再静默假装中性）──
+    _health_checks = [
+        ("QVIX", fwd.qvix),
+        ("美债10Y", fwd.us10y),
+        ("铜金比", fwd.copper_gold),
+        ("BDI", fwd.bdi),
+        ("金油比", fwd.gold_oil_ratio),
+        ("人民币", fwd.cny_usd),
+        ("美元指数", fwd.dxy),
+        ("两融余额", fwd.margin_balance),
+    ]
+    _failed = [name for name, val in _health_checks if val is None]
+    if _failed:
+        _health_text = f"**⚠️ 数据缺失**：{'、'.join(_failed)} 获取失败，相关判断可能不完整"
+    else:
+        _health_text = "✅ 全部数据源正常"
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _health_text}})
 
     elements.append({
         "tag": "note",

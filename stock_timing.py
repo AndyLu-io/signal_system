@@ -1851,6 +1851,38 @@ def build_card(results: list[dict], regime: str, ts: str,
         elements.append({"tag": "div", "text": {"tag": "lark_md",
                                                   "content": "暂无有效信号"}})
 
+    # ── 近期信号战绩（飞轮记分牌：让你知道系统最近准不准）─────────────────────
+    try:
+        _snap_files = sorted(Path(__file__).parent.glob("logs/stock_timing_*.json"))
+        _today_snap_map = {r["code"]: r.get("close", 0) for r in results}
+        _scorecard_lines = []
+        if len(_snap_files) >= 4:
+            # 取5-7天前的快照
+            _old_file = _snap_files[-min(6, len(_snap_files))]
+            _old_data = json.loads(_old_file.read_text(encoding="utf-8"))
+            _old_buys = [r for r in _old_data if r.get("signal") in ("BUY_STRONG", "BUY_WATCH")]
+            _tracked = []
+            for ob in _old_buys:
+                c = ob["code"]
+                old_p = ob.get("close", 0)
+                new_p = _today_snap_map.get(c, 0)
+                if old_p > 0 and new_p > 0:
+                    _tracked.append({"name": ob["name"], "ret": (new_p/old_p-1)*100})
+            if _tracked:
+                _wins = sum(1 for t in _tracked if t["ret"] > 0)
+                _avg = sum(t["ret"] for t in _tracked) / len(_tracked)
+                _days = _old_file.stem.replace("stock_timing_", "")
+                _scorecard_lines.append(f"**📋 近期战绩**（{_days}至今，{len(_tracked)}笔）")
+                _scorecard_lines.append(f"  胜率 **{_wins/len(_tracked)*100:.0f}%**  均收 **{_avg:+.1f}%**")
+                _sorted = sorted(_tracked, key=lambda x: -x["ret"])
+                if len(_sorted) >= 2:
+                    _scorecard_lines.append(f"  最佳: {_sorted[0]['name']}{_sorted[0]['ret']:+.1f}%  最差: {_sorted[-1]['name']}{_sorted[-1]['ret']:+.1f}%")
+        if _scorecard_lines:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(_scorecard_lines)}})
+    except Exception:
+        pass
+
     elements.append({
         "tag": "note",
         "elements": [{"tag": "plain_text",
@@ -2058,6 +2090,18 @@ def main(dry: bool = False, force: bool = False) -> None:
     results:   list[dict] = []
     reversals: list[dict] = []
 
+    # ── 读取 cluster 健康度（周度自动复盘结果，连续负超额的赛道被降级）────────
+    _degraded_clusters: set[str] = set()
+    _health_file = Path(__file__).parent / "state" / "cluster_health.json"
+    if _health_file.exists():
+        try:
+            _health = json.loads(_health_file.read_text(encoding="utf-8"))
+            _degraded_clusters = {c for c, h in _health.items() if h.get("status") == "degraded"}
+            if _degraded_clusters:
+                log.info(f"周度降级赛道: {_degraded_clusters}")
+        except Exception:
+            pass
+
     # ── 板块动量排名分档（决定仓位权重：强赛道满配、中性标准、弱势零配）────────
     _cluster_trend = ctx.get("cluster_trend", {})
     _sorted_clusters = sorted(
@@ -2109,6 +2153,11 @@ def main(dry: bool = False, force: bool = False) -> None:
         ind = compute_indicators(df)
         if ind is None:
             log.warning(f"{code} {info['name']} 数据不足({len(df)}条)")
+            continue
+
+        _today_date_str = datetime.today().strftime("%Y-%m-%d")
+        if ind.get("data_date", "")[:10] != _today_date_str:
+            log.warning(f"{code} {info['name']} K线过期({ind.get('data_date')}≠{_today_date_str})，跳过")
             continue
 
         ind["main_force_flow"] = stock_flows.get(code, 0.0)
@@ -2182,6 +2231,11 @@ def main(dry: bool = False, force: bool = False) -> None:
             if score < SCORE_BUY_STRONG + 1:
                 sig = "HOLD"
                 reasons.append(f"高风险板块({cluster_now})，买入阈值+1，等待更强信号")
+
+        # 周度降级cluster拦截（飞轮自动反馈：连续2周负超额的赛道自动提高门槛）
+        if sig in ("BUY_STRONG", "BUY_WATCH") and cluster_now in _degraded_clusters:
+            sig = "HOLD"
+            reasons.append(f"📉赛道降级({cluster_now})：近期连续负超额，暂停买入等待恢复")
 
         # ── 动态板块动量门（#2 行业开关层）──────────────────────────────────
         # 组合回测：买入超额几乎全来自强势赛道，逆势赛道持续负超额。
@@ -2267,6 +2321,8 @@ def main(dry: bool = False, force: bool = False) -> None:
             and (_sector_mom is None or _sector_mom >= SECTOR_MOM_VETO_SLOPE)):
             sig = "BUY_WATCH"
             reasons.append(f"🔥恐慌反转：强赛道({cluster_now})恐慌日+RSI{ind['rsi']:.0f}超卖+MA60向上，逆向买入")
+            if regime != "R1":
+                reasons.append(f"⚠️当前{regime}(非牛市)，此为防御中的逆向机会，建议半仓试探")
 
         # ── 止盈兑现（浮盈丰厚+动量衰减→主动保利润）──────────────────────────
         # 强赛道趋势强但波动大，3日涨>12%+RSI>65时主动兑现部分利润，防止回吐。
@@ -2423,6 +2479,35 @@ def main(dry: bool = False, force: bool = False) -> None:
             if total > 25:
                 exposure_warnings.append(f"⚠️ {c} 合计仓位{total:.0f}%（个股+ETF），超25%集中度上限")
                 log.warning(f"方向暴露: {c} = {total:.0f}%")
+
+        # ETF↔个股信号方向冲突检测
+        if _etf_sig_file.exists():
+            _etf_data = json.loads(_etf_sig_file.read_text(encoding="utf-8"))
+            from config import ETF_UNIVERSE
+            _etf_cluster_signals: dict[str, str] = {}
+            for sig in _etf_data.get("signals", []):
+                etf_info = ETF_UNIVERSE.get(str(sig.get("code", "")), {})
+                c = etf_info.get("cluster", "")
+                s = sig.get("signal", "")
+                if c and s in ("BUY_STRONG", "BUY_WATCH", "REDUCE", "SELL_STOP", "AVOID"):
+                    _etf_cluster_signals.setdefault(c, []).append(s)
+            # 本模块各cluster方向
+            _stock_cluster_dir: dict[str, list[str]] = {}
+            for r in results:
+                c = r["info"].get("cluster", "")
+                s = r["signal"]
+                if c and s in ("BUY_STRONG", "BUY_WATCH", "REDUCE", "SELL_STOP"):
+                    _stock_cluster_dir.setdefault(c, []).append(s)
+            # 检测冲突
+            for c in set(_etf_cluster_signals) & set(_stock_cluster_dir):
+                etf_buys = sum(1 for s in _etf_cluster_signals[c] if "BUY" in s)
+                etf_sells = sum(1 for s in _etf_cluster_signals[c] if s in ("REDUCE","SELL_STOP","AVOID"))
+                stk_buys = sum(1 for s in _stock_cluster_dir[c] if "BUY" in s)
+                stk_sells = sum(1 for s in _stock_cluster_dir[c] if s in ("REDUCE","SELL_STOP"))
+                if etf_buys > 0 and stk_sells > stk_buys:
+                    exposure_warnings.append(f"🔀 {c}: ETF看多(BUY) vs 个股偏空(多数REDUCE)——方向冲突，谨慎")
+                elif etf_sells > 0 and stk_buys > stk_sells:
+                    exposure_warnings.append(f"🔀 {c}: ETF看空 vs 个股看多(BUY)——方向冲突，以个股技术面为准")
     except Exception as e:
         log.debug(f"跨模块暴露检查: {e}")
 

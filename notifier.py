@@ -294,7 +294,8 @@ def build_card_content(
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"**机制评分 {score_total}/100** → {regime_em}{regime_label}\n"
+                            f"**机制评分 {score_total}/100** → {regime_em}{regime_label}"
+                            f"{'  ⚠️数据覆盖' + str(int(regime_score.get('coverage',1)*100)) + '%' if regime_score.get('coverage',1) < 0.95 else ''}\n"
                             f"{score_detail}\n\n"
                             f"**今日操作边界**\n{risk_line}"
                         ),

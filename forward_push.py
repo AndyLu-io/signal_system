@@ -39,6 +39,24 @@ def main() -> None:
     ok = send_forward_card(fwd, run_date)
     logger.info(f"推送结果: {'✓ 成功' if ok else '✗ 失败'}")
 
+    # 保存预判快照（供次日验证闭环：昨日预判vs今日实际）
+    import json
+    _pred = {
+        "date": run_date,
+        "slot": slot,
+        "us10y_regime": fwd.us10y_regime,
+        "cg_trend": fwd.cg_trend,
+        "qvix_level": fwd.qvix_level,
+        "bdi_signal": fwd.bdi_signal,
+        "gold_oil_signal": fwd.gold_oil_signal,
+        "composite_label": fwd.composite_label,
+        "composite_score": fwd.composite_score,
+    }
+    _pred_path = Path(__file__).parent / "state" / f"forward_pred_{run_date}.json"
+    _pred_path.parent.mkdir(parents=True, exist_ok=True)
+    _pred_path.write_text(json.dumps(_pred, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"预判快照: {_pred_path.name}")
+
 
 if __name__ == "__main__":
     main()
