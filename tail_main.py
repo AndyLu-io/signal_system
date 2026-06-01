@@ -168,9 +168,16 @@ def run() -> None:
         logger.warning(f"⚠️ 切换信号触发: {rotation.label()}")
 
     # ── 3. 飞书推送 ──────────────────────────────────────────────────────────
+    # 降噪：只推2STAR+（回测1STAR超额-0.35%无alpha，只占注意力）
+    _all_signals = reading.signals
+    reading.signals = [s for s in _all_signals if s.stars >= 2]
+    _filtered = len(_all_signals) - len(reading.signals)
+    if _filtered:
+        logger.info(f"尾盘降噪: 过滤{_filtered}只1STAR，只推{len(reading.signals)}只2STAR+")
     logger.info(f"推送{_MODE_LABEL[scan_mode]}信号...")
     ok = tail_notifier.send_tail_signal(reading, today_str, rotation=rotation, scan_mode=scan_mode)
     logger.info(f"推送{'成功 ✓' if ok else '失败 ✗'}")
+    reading.signals = _all_signals  # 恢复全部信号用于日志保存
 
     # ── 4. 保存日志 ──────────────────────────────────────────────────────────
     log_file = LOG_DIR / f"tail_detail_{datetime.today().strftime('%Y%m%d')}.json"

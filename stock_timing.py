@@ -2265,6 +2265,16 @@ def main(dry: bool = False, force: bool = False) -> None:
             sig = "BUY_WATCH"
             reasons.append(f"🔥恐慌反转：强赛道({cluster_now})恐慌日+RSI{ind['rsi']:.0f}超卖+MA60向上，逆向买入")
 
+        # ── 止盈兑现（浮盈丰厚+动量衰减→主动保利润）──────────────────────────
+        # 强赛道趋势强但波动大，3日涨>12%+RSI>65时主动兑现部分利润，防止回吐。
+        _chg3_val = ind.get("chg3", 0.0)
+        if (sig == "HOLD"
+            and _chg3_val >= 12.0
+            and ind.get("rsi", 50) > 65
+            and pool in ("core", "candidate")):
+            sig = "REDUCE"
+            reasons.append(f"💰止盈兑现：3日涨{_chg3_val:+.1f}%+RSI{ind['rsi']:.0f}，主动保利润")
+
         _cur_cluster = info.get("cluster", "")
         _cur_rank = _cluster_rank.get(_cur_cluster, "neutral")
         pos  = calc_position(sig, info, regime, sector_rank=_cur_rank)
@@ -2364,6 +2374,21 @@ def main(dry: bool = False, force: bool = False) -> None:
             r["position_pct"] = 0
             r["reasons"].append(f"同链({cluster})已有{_MAX_BUY_PER_CLUSTER}只买入，集中度降级")
             log.info(f"  集中度限制: {r['name']} {cluster} → HOLD（同链已满）")
+
+    # ── 全局每日买入上限：100万集中出击，每日最多3只新仓（每只20-30万有力度）
+    _MAX_BUY_PER_DAY = 3
+    all_buys = [r for r in results if r["signal"] in ("BUY_STRONG", "BUY_WATCH")]
+    if len(all_buys) > _MAX_BUY_PER_DAY:
+        # 排序：恐慌逆向优先 > score 高分
+        def _buy_priority(r):
+            is_panic = any("恐慌反转" in reason for reason in r.get("reasons", []))
+            return (-int(is_panic), -r["score"])
+        all_buys.sort(key=_buy_priority)
+        for r in all_buys[_MAX_BUY_PER_DAY:]:
+            r["signal"] = "HOLD"
+            r["position_pct"] = 0
+            r["reasons"].append(f"今日已有{_MAX_BUY_PER_DAY}只买入，资金集中不分散")
+            log.info(f"  集中出击: {r['name']} → HOLD（每日上限{_MAX_BUY_PER_DAY}只）")
 
     # ── 跨模块方向暴露预警 ─────────────────────────────────────────────────
     exposure_warnings: list[str] = []

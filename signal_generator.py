@@ -170,10 +170,10 @@ def _apply_timing_gate(
 # ─── 技术面入场确认 ────────────────────────────────────────────────────────────
 
 def _check_technical_entry(code: str,
-                            etf_prices: dict[str, Optional[pd.DataFrame]]) -> bool:
+                            etf_prices: dict[str, Optional[pd.DataFrame]],
+                            regime: str = "R2") -> bool:
     """价格在5日均线合理区间 + 成交量不萎缩。
-    回测: tier=A 被 ma5 *1.02 拦截后仍涨+7.67%，放宽至+6% 减少误杀。
-    下轨保留 -3%（价格完全跌破才不买）。
+    R1牛市放宽上轨到+10%（趋势确认后追涨合理，ETF BUY_WATCH R1超额+4.11%）。
     """
     df = etf_prices.get(code)
     if df is None or len(df) < 6:
@@ -181,8 +181,8 @@ def _check_technical_entry(code: str,
     closes = df["close"].values
     ma5 = closes[-5:].mean()
     current = closes[-1]
-    # 放宽上轨：+6%（原+2%导致牛市行情永远买不进）
-    if current > ma5 * 1.06:
+    upper = 1.10 if regime == "R1" else 1.06
+    if current > ma5 * upper:
         return False
     if current < ma5 * 0.97:
         return False
@@ -308,7 +308,7 @@ def generate_signals(
             signal = SIGNAL_HOLD
             note = "维持持仓"
         else:
-            tech_ok = _check_technical_entry(code, etf_prices)
+            tech_ok = _check_technical_entry(code, etf_prices, regime)
             if tier == "S" and tech_ok:
                 signal = SIGNAL_BUY_STRONG
                 note = "S级强信念，三因子确认"

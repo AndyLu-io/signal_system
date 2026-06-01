@@ -375,9 +375,9 @@ def fetch_position_alerts(etf_prices: dict) -> list:
         elif loss_pct <= -5.0 and today_chg <= -1.5:
             alert_type = "WARN_LOSS"
         elif ma5_dev >= 4.5 and rsi >= 80 and today_chg <= 0:
-            # 超买减仓加趋势确认：组合回测显示纯超买冲高减仓后仍超额上涨+8.75%(卖飞)。
-            # 仅在超买(RSI>=80)且当日已转弱(冲高回落/不再上攻)时减仓，避免主升浪中段误减。
             alert_type = "REDUCE"
+        elif len(close) >= 4 and (current / float(close.iloc[-4]) - 1) * 100 >= 8.0 and loss_pct >= 10.0:
+            alert_type = "TAKE_PROFIT"
         else:
             continue
 

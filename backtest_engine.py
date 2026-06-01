@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # 买入类信号才建仓；其余（HOLD/REDUCE/SELL_STOP/AVOID）不主动开新仓
-_BUY_SIGNALS = {"BUY_STRONG", "BUY_WATCH"}
+_BUY_SIGNALS = {"BUY_STRONG", "BUY_WATCH", "TAIL_1STAR", "TAIL_2STAR", "TAIL_3STAR"}
 # 单笔默认仓位（当 CSV 无 position_pct 时的兜底）
 _DEFAULT_POS_PCT = 10.0
 # 单笔交易往返成本（佣金+滑点+印花，双边）默认 15bp
