@@ -2253,15 +2253,18 @@ def main(dry: bool = False, force: bool = False) -> None:
         # ── 恐慌反转买入（④强赛道恐慌日逆向策略）─────────────────────────────
         # 数据验证：强赛道恐慌日 T+3 均收+5.36% 胜率67%，比正常买入更优。
         # 条件：信号偏弱(HOLD/REDUCE) + 强赛道今日恐慌 + RSI超卖 + MA60仍向上
+        # 排除：板块趋势已明确下行(mom_composite<VETO)时不抄底，防止下降趋势中逆势
         _panic_keys = ctx.get("panic_cluster_keys", set())
         _PANIC_STRONG = {"optics", "semicon", "pcb", "industrial_auto"}
+        _sector_mom = ctx.get("cluster_trend", {}).get(cluster_now)
         if (sig in ("HOLD", "REDUCE")
             and not hard_stop
             and cluster_now in _panic_keys
             and cluster_now in _PANIC_STRONG
             and ind.get("rsi", 50) <= 40
             and ind.get("ma60_slope_5d", 0) > 0
-            and pool != "watch"):
+            and pool != "watch"
+            and (_sector_mom is None or _sector_mom >= SECTOR_MOM_VETO_SLOPE)):
             sig = "BUY_WATCH"
             reasons.append(f"🔥恐慌反转：强赛道({cluster_now})恐慌日+RSI{ind['rsi']:.0f}超卖+MA60向上，逆向买入")
 
