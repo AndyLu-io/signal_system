@@ -777,6 +777,11 @@ def generate_report(
     lines.append(f"# {year}-{month} 信号后验复盘\n")
     lines.append(f"生成时间：{datetime.today().strftime('%Y-%m-%d %H:%M')}\n")
 
+    lines.append("> ⚠️ **口径声明**：个股池由季报事后选出的赢家构成，存在**幸存者偏差**；"
+                 "本报告统计的是**裸前向收益**（非扣费组合收益），牛市样本下胜率/超额天然偏乐观。"
+                 "结论仅供信号间相对比较，调参须保留样本外验证，绝对收益不可外推实盘。"
+                 "组合层面（含成本/回撤/夏普）请用 `backtest_engine.py`。\n")
+
     # 总览
     all_recs = etf_records + stock_records + tail_records
     lines.append("## 总览\n")

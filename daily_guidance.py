@@ -374,7 +374,9 @@ def fetch_position_alerts(etf_prices: dict) -> list:
             alert_type = "STOP_LOSS"
         elif loss_pct <= -5.0 and today_chg <= -1.5:
             alert_type = "WARN_LOSS"
-        elif ma5_dev >= 4.5 and rsi >= 76:
+        elif ma5_dev >= 4.5 and rsi >= 80 and today_chg <= 0:
+            # 超买减仓加趋势确认：组合回测显示纯超买冲高减仓后仍超额上涨+8.75%(卖飞)。
+            # 仅在超买(RSI>=80)且当日已转弱(冲高回落/不再上攻)时减仓，避免主升浪中段误减。
             alert_type = "REDUCE"
         else:
             continue
@@ -1391,6 +1393,14 @@ def main():
             attempts=3, delays=(30, 60),
         )
         print("[OK] 飞书推送成功")
+        # 保存盘中预警快照（供 stock_timing 收盘后做信号一致性对比）
+        if position_alerts:
+            import json as _json
+            _alerts_snap = {a["code"]: a["alert_type"] for a in position_alerts}
+            _snap_path = Path(__file__).parent / "state" / f"intraday_alerts_{date.today()}.json"
+            _snap_path.parent.mkdir(parents=True, exist_ok=True)
+            _snap_path.write_text(_json.dumps(_alerts_snap, ensure_ascii=False), encoding="utf-8")
+            print(f"[快照] 盘中预警: {_snap_path.name}")
     except Exception as e:
         print(f"[ERR] 飞书推送最终失败: {e}")
 

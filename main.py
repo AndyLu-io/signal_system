@@ -121,8 +121,23 @@ def run() -> None:
     regime_score = regime_engine.calculate_regime_score(
         csi300, csi500, north_flow, margin, etf_prices
     )
+
+    # 前瞻指标修正 regime（QVIX+铜金比+金油比，拐点提前1-2周预警）
+    try:
+        fwd = forward_indicators.calc_forward_indicators()
+        regime_engine.adjust_regime_with_forward(regime_score, fwd)
+    except Exception as e:
+        logger.warning(f"前瞻指标获取失败，regime不修正: {e}")
+        fwd = None
+
     regime, regime_state = regime_engine.determine_regime(regime_score["total"])
-    logger.info(f"机制评分: {regime_score['total']} → 确认机制: {regime}")
+    _fwd_adj = regime_score.get('forward_adj', 0)
+    _fwd_tag = f" 前瞻adj={_fwd_adj:+.0f}" if _fwd_adj else ""
+    logger.info(
+        f"机制评分: {regime_score['total']} → 确认机制: {regime} "
+        f"[数据覆盖{regime_score.get('coverage', 1.0):.0%} 置信{regime_score.get('confidence', '?')}]"
+        f"{_fwd_tag}"
+    )
 
     # 机制切换提示
     pending = regime_state.get("pending_regime")
@@ -246,14 +261,22 @@ def run() -> None:
     logger.info(f"ETF底部反转候选共 {len(reversals)} 只")
 
     # ── 4.6 前瞻指标 ────────────────────────────────────────────────────────
-    logger.info("Step 4.6/5: 计算前瞻指标...")
-    fwd = forward_indicators.calc_forward_indicators()
-    logger.info(
-        f"前瞻指标: {fwd.composite_score:.0f}/100 [{fwd.composite_label}] "
-        f"QVIX={fwd.qvix} 利差={fwd.yield_spread}bp 铜金比={fwd.copper_gold}"
-    )
-    fwd_ok = forward_indicators.send_forward_card(fwd, today_str)
-    logger.info(f"前瞻指标推送: {'✓' if fwd_ok else '✗'}")
+    logger.info("Step 4.6/5: 推送前瞻指标...")
+    if fwd is None:
+        try:
+            fwd = forward_indicators.calc_forward_indicators()
+        except Exception as e:
+            logger.warning(f"前瞻指标获取失败: {e}")
+    if fwd is not None:
+        logger.info(
+            f"前瞻指标: {fwd.composite_score:.0f}/100 [{fwd.composite_label}] "
+            f"QVIX={fwd.qvix} 利差={fwd.yield_spread}bp 铜金比={fwd.copper_gold}"
+        )
+        fwd_ok = forward_indicators.send_forward_card(fwd, today_str)
+        logger.info(f"前瞻指标推送: {'✓' if fwd_ok else '✗'}")
+    else:
+        fwd_ok = False
+        logger.warning("前瞻指标不可用，跳过推送")
 
     # ── 5. 飞书推送 ──────────────────────────────────────────────────────────
     logger.info("Step 5/5: 推送飞书...")

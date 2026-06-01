@@ -23,10 +23,11 @@ STATE_FILE = Path(__file__).parent / "state" / "regime_state.json"
 
 # ─── 六个子指标评分（0-10分） ────────────────────────────────────────────────
 
-def _score_s1_trend(csi300: Optional[pd.DataFrame]) -> float:
-    """沪深300趋势强度：20日均线斜率 + 价格与均线的关系"""
+def _score_s1_trend(csi300: Optional[pd.DataFrame]) -> tuple[float, bool]:
+    """沪深300趋势强度：20日均线斜率 + 价格与均线的关系。
+    返回 (score, valid)；valid=False 表示数据缺失，应从加权中剔除而非当中性分。"""
     if csi300 is None or len(csi300) < 22:
-        return 5.0
+        return 5.0, False
     close = csi300["close"].values
     ma20 = close[-20:].mean()
     current = close[-1]
@@ -37,64 +38,64 @@ def _score_s1_trend(csi300: Optional[pd.DataFrame]) -> float:
     if above_ma and slope_sign > 0:
         # 在均线上方且上升 → 8-10分
         strength = min((current - ma20) / ma20 * 100, 5)  # 偏离度
-        return round(8 + strength * 0.4, 1)
+        return round(8 + strength * 0.4, 1), True
     elif above_ma and slope_sign < 0:
         # 在均线上方但下降 → 5-7分
-        return 6.0
+        return 6.0, True
     elif not above_ma and slope_sign > 0:
         # 在均线下方但回升 → 4-5分
-        return 4.5
+        return 4.5, True
     else:
         # 在均线下方且下降 → 0-3分
         drop = min((ma20 - current) / ma20 * 100, 5)
-        return round(max(0, 3 - drop * 0.6), 1)
+        return round(max(0, 3 - drop * 0.6), 1), True
 
 
-def _score_s2_volume(csi300: Optional[pd.DataFrame]) -> float:
-    """成交额动能：当日/近5日成交额 vs 30日均值"""
+def _score_s2_volume(csi300: Optional[pd.DataFrame]) -> tuple[float, bool]:
+    """成交额动能：当日/近5日成交额 vs 30日均值。返回 (score, valid)。"""
     if csi300 is None or len(csi300) < 32:
-        return 5.0
+        return 5.0, False
     if "amount" not in csi300.columns:
-        return 5.0
+        return 5.0, False
     amounts = csi300["amount"].values
     avg30 = amounts[-32:-2].mean()
     recent5 = amounts[-5:].mean()
     if avg30 == 0:
-        return 5.0
+        return 5.0, False
     ratio = recent5 / avg30
     if ratio >= 1.3:
-        return 9.0
+        return 9.0, True
     elif ratio >= 1.1:
-        return 7.5
+        return 7.5, True
     elif ratio >= 0.9:
-        return 5.5
+        return 5.5, True
     elif ratio >= 0.7:
-        return 3.5
+        return 3.5, True
     else:
-        return 1.5
+        return 1.5, True
 
 
-def _score_s3_north(north_flow: Optional[pd.DataFrame]) -> float:
+def _score_s3_north(north_flow: Optional[pd.DataFrame]) -> tuple[float, bool]:
     """
-    北向资金评分（0-10）。
+    北向资金评分（0-10）。返回 (score, valid)。
     优先使用 net_buy_billion（精确净买入），若全为 null 则用成交总额活跃度偏离代理。
-    无数据返回中性 5.0。
+    无数据返回 (5.0, False)，从加权中剔除而非拉中枢。
     """
     if north_flow is None or len(north_flow) < 2:
-        return 5.0
+        return 5.0, False
 
     # ── 优先：精确净买入 ────────────────────────────────────────────────────
     if "net_buy_billion" in north_flow.columns:
         net_series = north_flow["net_buy_billion"].dropna()
         if len(net_series) >= 2:
             flow5 = net_series.tail(5).sum()
-            if flow5 >= 100: return 9.5
-            if flow5 >= 50:  return 8.0
-            if flow5 >= 10:  return 6.5
-            if flow5 >= 0:   return 5.0
-            if flow5 >= -30: return 3.5
-            if flow5 >= -50: return 2.0
-            return 0.5
+            if flow5 >= 100: return 9.5, True
+            if flow5 >= 50:  return 8.0, True
+            if flow5 >= 10:  return 6.5, True
+            if flow5 >= 0:   return 5.0, True
+            if flow5 >= -30: return 3.5, True
+            if flow5 >= -50: return 2.0, True
+            return 0.5, True
 
     # ── 降级：成交总额活跃度偏离（方向未知，保守给分）───────────────────────
     if "deal_amt_billion" in north_flow.columns:
@@ -105,18 +106,18 @@ def _score_s3_north(north_flow: Optional[pd.DataFrame]) -> float:
             if avg5 > 0:
                 deviation = (recent - avg5) / avg5  # 相对偏离
                 # 活跃度高 → 略偏积极；萎缩 → 略偏消极；方向不确定，不给极端分
-                if deviation > 0.3:   return 6.0   # 成交明显放量
-                if deviation > 0.1:   return 5.5
-                if deviation > -0.1:  return 5.0   # 正常
-                if deviation > -0.3:  return 4.5
-                return 4.0                           # 成交明显萎缩
+                if deviation > 0.3:   return 6.0, True   # 成交明显放量
+                if deviation > 0.1:   return 5.5, True
+                if deviation > -0.1:  return 5.0, True   # 正常
+                if deviation > -0.3:  return 4.5, True
+                return 4.0, True                          # 成交明显萎缩
 
-    return 5.0
+    return 5.0, False
 
 
-def _score_s4_rotation(etf_prices: dict[str, Optional[pd.DataFrame]]) -> float:
+def _score_s4_rotation(etf_prices: dict[str, Optional[pd.DataFrame]]) -> tuple[float, bool]:
     """
-    板块轮动速度：用核心ETF的动量一致性衡量
+    板块轮动速度：用核心ETF的动量一致性衡量。返回 (score, valid)。
     各ETF 5日涨幅的方差越小 → 趋势越一致 → 分数越高
     """
     returns_5d = []
@@ -125,63 +126,63 @@ def _score_s4_rotation(etf_prices: dict[str, Optional[pd.DataFrame]]) -> float:
             r = (df["close"].iloc[-1] / df["close"].iloc[-6] - 1) * 100
             returns_5d.append(r)
     if len(returns_5d) < 3:
-        return 5.0
+        return 5.0, False
     arr = np.array(returns_5d)
     positive_ratio = (arr > 0).mean()
     std = arr.std()
     # 正向ETF比例高、分歧小 → 趋势清晰
     if positive_ratio >= 0.7 and std < 3:
-        return 8.5
+        return 8.5, True
     elif positive_ratio >= 0.6 and std < 5:
-        return 6.5
+        return 6.5, True
     elif positive_ratio >= 0.5:
-        return 5.0
+        return 5.0, True
     elif positive_ratio >= 0.3:
-        return 3.5
+        return 3.5, True
     else:
-        return 1.5
+        return 1.5, True
 
 
-def _score_s5_margin(margin: Optional[pd.DataFrame]) -> float:
-    """两融余额5日变化率"""
+def _score_s5_margin(margin: Optional[pd.DataFrame]) -> tuple[float, bool]:
+    """两融余额5日变化率。返回 (score, valid)。"""
     if margin is None or len(margin) < 6:
-        return 5.0
+        return 5.0, False
     bal = margin["balance_billion"].values
     change_rate = (bal[-1] - bal[-6]) / abs(bal[-6]) * 100 if bal[-6] != 0 else 0
     if change_rate >= 2:
-        return 9.0
+        return 9.0, True
     elif change_rate >= 0.5:
-        return 7.0
+        return 7.0, True
     elif change_rate >= -0.5:
-        return 5.5
+        return 5.5, True
     elif change_rate >= -2:
-        return 3.5
+        return 3.5, True
     else:
-        return 1.0
+        return 1.0, True
 
 
-def _score_s6_volatility(csi500: Optional[pd.DataFrame]) -> float:
-    """波动率压力：中证500日内振幅 vs 30日均值（振幅小=压力小=高分）"""
+def _score_s6_volatility(csi500: Optional[pd.DataFrame]) -> tuple[float, bool]:
+    """波动率压力：中证500日内振幅 vs 30日均值（振幅小=压力小=高分）。返回 (score, valid)。"""
     if csi500 is None or len(csi500) < 32:
-        return 5.0
+        return 5.0, False
     if "high" not in csi500.columns or "low" not in csi500.columns:
-        return 5.0
+        return 5.0, False
     ranges = ((csi500["high"] - csi500["low"]) / csi500["low"] * 100).values
     avg30 = ranges[-32:-2].mean()
     recent = ranges[-1]
     if avg30 == 0:
-        return 5.0
+        return 5.0, False
     ratio = recent / avg30
     if ratio <= 0.7:
-        return 9.0
+        return 9.0, True
     elif ratio <= 0.9:
-        return 7.5
+        return 7.5, True
     elif ratio <= 1.1:
-        return 5.5
+        return 5.5, True
     elif ratio <= 1.5:
-        return 3.0
+        return 3.0, True
     else:
-        return 1.0
+        return 1.0, True
 
 
 # ─── 机制评分汇总 ─────────────────────────────────────────────────────────────
@@ -193,17 +194,43 @@ def calculate_regime_score(
     margin: Optional[pd.DataFrame],
     etf_prices: dict[str, Optional[pd.DataFrame]],
 ) -> dict:
-    s1 = _score_s1_trend(csi300)
-    s2 = _score_s2_volume(csi300)
-    s3 = _score_s3_north(north_flow)
-    s4 = _score_s4_rotation(etf_prices)
-    s5 = _score_s5_margin(margin)
-    s6 = _score_s6_volatility(csi500)
+    s1, v1 = _score_s1_trend(csi300)
+    s2, v2 = _score_s2_volume(csi300)
+    s3, v3 = _score_s3_north(north_flow)
+    s4, v4 = _score_s4_rotation(etf_prices)
+    s5, v5 = _score_s5_margin(margin)
+    s6, v6 = _score_s6_volatility(csi500)
 
     w = REGIME_WEIGHTS
-    raw = (s1 * w["s1_trend"] + s2 * w["s2_volume"] + s3 * w["s3_north"] +
-           s4 * w["s4_rotation"] + s5 * w["s5_margin"] + s6 * w["s6_vol"])
+    components = [
+        ("s1_trend",    s1, v1, w["s1_trend"]),
+        ("s2_volume",   s2, v2, w["s2_volume"]),
+        ("s3_north",    s3, v3, w["s3_north"]),
+        ("s4_rotation", s4, v4, w["s4_rotation"]),
+        ("s5_margin",   s5, v5, w["s5_margin"]),
+        ("s6_vol",      s6, v6, w["s6_vol"]),
+    ]
+
+    # 只用有效指标重新归一化权重（剔除缺失指标，而非当中性分拉中枢）
+    valid_weight = sum(wt for _, _, valid, wt in components if valid)
+    coverage = round(valid_weight, 3)  # 有效指标覆盖的权重占比（总权重=1.0）
+
+    if valid_weight > 0:
+        raw = sum(sc * wt for _, sc, valid, wt in components if valid) / valid_weight
+    else:
+        raw = 5.0  # 全部缺失，回退中性（极少发生）
+
     score = round(raw * 10, 1)  # 转为 0-100 分
+
+    # ── 低覆盖度保守惩罚：数据不足时不应乐观，按缺失程度向防御端压分 ──────────
+    # coverage 1.0=满；<0.6 表示关键指标(如北向/两融)大量缺失，此时高分不可信。
+    if coverage < 0.6:
+        # 缺失越多压得越狠：缺失40%权重→最多压15分，线性
+        penalty = (0.6 - coverage) / 0.6 * 15.0
+        score = round(max(0.0, score - penalty), 1)
+        logger.warning(f"regime 数据覆盖度低({coverage:.0%})，保守压分 -{penalty:.1f} → {score}")
+
+    confidence = "high" if coverage >= 0.8 else ("medium" if coverage >= 0.6 else "low")
 
     # ── 极端事件快速降级：单日暴跌直接压入R4区间 ──────────────────────────
     extreme_event = False
@@ -231,6 +258,8 @@ def calculate_regime_score(
         "s4_rotation": round(s4, 1),
         "s5_margin": round(s5, 1),
         "s6_volatility": round(s6, 1),
+        "coverage": coverage,
+        "confidence": confidence,
         "total": score,
     }
     return breakdown
@@ -301,6 +330,67 @@ def determine_regime(score: float) -> tuple[str, dict]:
 
     _save_state(state)
     return state["current_regime"], state
+
+
+# ─── 前瞻指标修正层 ──────────────────────────────────────────────────────────
+
+def adjust_regime_with_forward(regime_score: dict, fwd) -> dict:
+    """
+    用前瞻指标(QVIX/铜金比/金油比)修正 regime 总分。
+    fwd: ForwardReading 对象（来自 forward_indicators.calc_forward_indicators()）。
+
+    修正逻辑（控制在±10分，不应单独触发切换，只加速/延缓确认）：
+    - QVIX PANIC → -8，HIGH → -5，ELEVATED → -2（恐慌扩散=下跌风险）
+    - QVIX LOW → -3（低波自满=黑天鹅前兆，不加分反而保守）
+    - 铜金比 RISK_OFF → -5（避险主导），RISK_ON → +3
+    - 金油比出现 GEOPOLITICAL_RISK → -5（地缘避险信号）
+
+    原位修改 regime_score['total'] 并记录 forward_adj 字段。
+    """
+    if fwd is None:
+        regime_score["forward_adj"] = 0.0
+        return regime_score
+
+    adj = 0.0
+
+    # QVIX 恐慌度
+    qvix_level = getattr(fwd, "qvix_level", "NORMAL")
+    if qvix_level == "PANIC":
+        adj -= 8.0
+    elif qvix_level == "HIGH":
+        adj -= 5.0
+    elif qvix_level == "ELEVATED":
+        adj -= 2.0
+    elif qvix_level == "LOW":
+        adj -= 3.0  # 低波自满是反向指标
+
+    # 铜金比趋势
+    cg_trend = getattr(fwd, "cg_trend", "NEUTRAL")
+    if cg_trend == "RISK_OFF":
+        adj -= 5.0
+    elif cg_trend == "RISK_ON":
+        adj += 3.0
+
+    # 金油比地缘风险
+    gold_oil_signal = getattr(fwd, "gold_oil_signal", "NEUTRAL")
+    if gold_oil_signal == "GEOPOLITICAL_RISK":
+        adj -= 5.0
+
+    # 限幅±10
+    adj = max(-10.0, min(10.0, adj))
+
+    old_score = regime_score["total"]
+    new_score = round(max(0.0, min(100.0, old_score + adj)), 1)
+    regime_score["total"] = new_score
+    regime_score["forward_adj"] = adj
+
+    if abs(adj) >= 3:
+        logger.info(
+            f"前瞻修正: QVIX={qvix_level} 铜金={cg_trend} 金油={gold_oil_signal} "
+            f"→ adj={adj:+.0f} ({old_score}→{new_score})"
+        )
+
+    return regime_score
 
 
 def get_regime_params(regime: str) -> dict:

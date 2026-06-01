@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-28",
+  "date": "2026-05-29",
   "signals": [
     {
       "code": "515880",
@@ -7,56 +7,56 @@
       "signal": "BUY_WATCH",
       "weight_pct": 15.0,
       "stop_loss_pct": 5.0,
-      "composite": 70,
-      "note": "周资金大幅流入146亿；短线涨幅已大，追高风险",
+      "composite": 80,
+      "note": "周资金大幅流入119亿；资金偏离度极高",
       "source": "weekly_report",
       "style": "中线配置",
       "hold_period": "4-8周（中线配置）",
       "stop_condition": "跌破20日均线清仓",
-      "generated_date": "2026-05-28"
+      "generated_date": "2026-05-29"
     },
     {
-      "code": "512480",
-      "name": "半导体",
+      "code": "159611",
+      "name": "电力",
       "signal": "BUY_WATCH",
-      "weight_pct": 15.0,
+      "weight_pct": 10.0,
       "stop_loss_pct": 5.0,
-      "composite": 80,
-      "note": "周资金大幅流入94亿；资金偏离度高",
+      "composite": 50,
+      "note": "周资金大幅流入73亿；资金偏离度高",
       "source": "weekly_report",
       "style": "中线配置",
-      "hold_period": "4-8周（中线配置）",
-      "stop_condition": "跌破20日均线清仓",
-      "generated_date": "2026-05-28"
+      "hold_period": "1-2周",
+      "stop_condition": "周度资金转为净流出则止损",
+      "generated_date": "2026-05-29"
     },
     {
       "code": "159732",
       "name": "消费电子",
       "signal": "BUY_WATCH",
-      "weight_pct": 15.0,
+      "weight_pct": 10.0,
       "stop_loss_pct": 5.0,
-      "composite": 80,
-      "note": "周资金大幅流入79亿；资金偏离度高",
+      "composite": 60,
+      "note": "周资金流入22亿；五年规划共振(内循环消费)",
       "source": "weekly_report",
       "style": "中线配置",
       "hold_period": "4-8周（中线配置）",
       "stop_condition": "跌破20日均线清仓",
-      "generated_date": "2026-05-28"
+      "generated_date": "2026-05-29"
     },
     {
-      "code": "512400",
-      "name": "小金属",
+      "code": "512690",
+      "name": "白酒",
       "signal": "BUY_WATCH",
       "weight_pct": 5.0,
       "stop_loss_pct": 5.0,
       "composite": 40,
-      "note": "周资金流入45亿；连续多周主线（趋势确认）",
+      "note": "五年规划共振(内循环消费)；本周新进Top10（轮动起点）",
       "source": "weekly_report",
       "style": "中线配置",
-      "hold_period": "持有至趋势破坏",
-      "stop_condition": "跌破20日均线清仓",
-      "generated_date": "2026-05-28"
+      "hold_period": "4-8周（中线配置）",
+      "stop_condition": "周度资金转为净流出则止损",
+      "generated_date": "2026-05-29"
     }
   ],
-  "expires": "2026-06-04"
+  "expires": "2026-06-05"
 }

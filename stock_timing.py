@@ -66,6 +66,21 @@ SCORE_REDUCE     = -4  # 全年回测: sc=-4超额-4.36%胜率11%, sc=-5/-6强�
 # watch池高风险cluster，买入阈值提高+1（回测: chemical/food_bev/consumer T+5超额持续-2~-5%）
 _HIGH_RISK_CLUSTERS = frozenset({"chemical", "food_bev", "consumer"})
 
+# ── 动态板块动量门（#2 行业开关层）─────────────────────────────────────────────
+# 用板块代理ETF的MA20斜率(%/5日，见 ctx['cluster_trend'])动态判断板块趋势。
+# 设计依据：组合回测显示买入信号超额几乎全部来自强势赛道(optics/semicon)，
+# 弱势赛道(chemical/new_energy)持续负超额——砍掉逆势赛道是稳健加分项，
+# 且基于实时板块趋势而非历史名单拟合，能自动适配赛道轮动。
+SECTOR_MOM_VETO_SLOPE  = -1.0   # MA20斜率 < -1.0%：板块明确下行，买入信号一票否决降HOLD
+SECTOR_MOM_WEAK_SLOPE  = -0.3   # MA20斜率 ∈ [-1.0,-0.3)：板块走弱，买入门槛+1（需更强信号）
+
+# ── 绝对止损闸门（②不可被回测降级覆盖的硬风控）──────────────────────────────
+# A股个股特征是"闷杀"——一字跌停、连续阴跌、业绩暴雷。任何"暂缓止损降为减仓"的
+# 回测优化规则都不应覆盖这条底线，否则黑天鹅来时会扛着不动。触发任一即无条件 SELL_STOP。
+HARD_STOP_DAY_DROP   = -9.0    # 单日跌幅 <= -9%（近跌停/重大利空）
+HARD_STOP_3D_DROP    = -15.0   # 3日累计跌幅 <= -15%（连续闷杀）
+HARD_STOP_CONSEC_DOWN = 5      # 连续收阴 >= 5日（阴跌不止，趋势性破位）
+
 # cluster → 代理ETF（sh/sz前缀），用于板块趋势判断
 # 规则：所在板块ETF的MA20斜率为负时，尾盘翻转信号不成立
 _CLUSTER_PROXY_ETF: dict[str, str] = {
@@ -235,6 +250,12 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         if len(close) >= 4 else 0.0
     )
 
+    # 单日涨跌幅（用于绝对止损闸门：识别跌停/闷杀）
+    chg1 = (
+        (close.iloc[-1] / close.iloc[-2] - 1) * 100
+        if len(close) >= 2 else 0.0
+    )
+
     if dif.iloc[-2] < dea.iloc[-2] and dif.iloc[-1] > dea.iloc[-1]:
         cross = "golden"
     elif dif.iloc[-2] > dea.iloc[-2] and dif.iloc[-1] < dea.iloc[-1]:
@@ -312,6 +333,7 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
         "rsi":             float(rsi.iloc[-1]),
         "vol_ratio":       float(vol_ratio),
         "chg3":            float(chg3),
+        "chg1":            float(chg1),
         "data_date":       data_date,
         "ma60_slope_5d":   ma60_slope_5d,
         "consec_down_days": consec_down_days,
@@ -335,17 +357,30 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
     reasons: list[str] = []
     close, ma5, ma20, ma60 = ind["close"], ind["ma5"], ind["ma20"], ind["ma60"]
 
-    # 趋势
+    # ── 维度1: 趋势（合并均线排列+MA60方向+连跌，消除共线性，单一分 ∈ [-2,+3]）
+    trend_score = 0
     if close > ma5 > ma20 > ma60:
-        score += 2; reasons.append("多头排列")
+        trend_score = 2; reasons.append("多头排列")
     elif close > ma20 > ma60:
-        score += 1; reasons.append("站20/60线")
+        trend_score = 1; reasons.append("站20/60线")
     elif close < ma60:
-        score -= 2; reasons.append("跌破60线")
+        trend_score = -2; reasons.append("跌破60线")
     elif close < ma20:
-        score -= 1; reasons.append("跌破20线")
+        trend_score = -1; reasons.append("跌破20线")
+    # MA60方向只在趋势中性/正面时追加（避免与"跌破60线"重复扣分）
+    ma60_slope = ind.get("ma60_slope_5d", 0.0)
+    if trend_score >= 0 and ma60_slope > 0.5:
+        trend_score += 1; reasons.append(f"MA60上行(+{ma60_slope:.1f}%/5日)")
+    elif trend_score >= -1 and ma60_slope < -0.8:
+        trend_score -= 1; reasons.append(f"MA60下行趋势({ma60_slope:.1f}%/5日)")
+    # 连跌只在已偏弱时追加（避免多头排列+连跌矛盾打分）
+    consec = ind.get("consec_down_days", 0)
+    if consec >= 5 and trend_score <= 0:
+        trend_score -= 1; reasons.append(f"连跌{consec}日")
+    trend_score = max(-2, min(3, trend_score))
+    score += trend_score
 
-    # MACD
+    # ── 维度2: MACD 动量（独立于均线，看金叉/死叉/柱体方向）
     cross = ind["cross"]
     if cross == "golden":
         score += 2; reasons.append("MACD金叉")
@@ -360,25 +395,62 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
         elif ind["macd_bar"] < ind["macd_bar_p"]:
             score -= 1; reasons.append("绿柱扩张")
 
-    # RSI(14)
+    # ── 维度3: 过热/追高（合并RSI/偏离MA20/连涨，取最严重惩罚，单一分 ∈ [-3,+2]）
+    overheat_score = 0
     rsi = ind["rsi"]
-    if rsi > 78:
-        score -= 2; reasons.append(f"RSI超买{rsi:.0f}")
-    elif rsi > 68:
-        score -= 1; reasons.append(f"RSI偏高{rsi:.0f}")
-    elif rsi < 25:
-        score += 2; reasons.append(f"RSI超卖{rsi:.0f}")
+    dev_ma20 = (close - ma20) / ma20 * 100 if ma20 > 0 else 0
+    consec_up = ind.get("consec_up_days", 0)
+    # 超卖加分（只取一次）
+    if rsi < 25:
+        overheat_score = 2; reasons.append(f"RSI超卖{rsi:.0f}")
     elif rsi < 35:
-        score += 1; reasons.append(f"RSI偏低{rsi:.0f}")
+        overheat_score = 1; reasons.append(f"RSI偏低{rsi:.0f}")
+    else:
+        # 过热：取 RSI/MA20偏离/连涨 中最严重的单一惩罚（不累加）
+        penalties = []
+        if rsi > 78:
+            penalties.append((-2, f"RSI超买{rsi:.0f}"))
+        elif rsi > 68:
+            penalties.append((-1, f"RSI偏高{rsi:.0f}"))
+        if dev_ma20 >= 20:
+            penalties.append((-2, f"严重偏离MA20+{dev_ma20:.0f}%"))
+        elif dev_ma20 >= 12:
+            penalties.append((-1, f"偏离MA20+{dev_ma20:.0f}%"))
+        if consec_up >= 5:
+            penalties.append((-2, f"连涨{consec_up}日追高风险"))
+        elif consec_up >= 3 and close > ma5 * 1.04:
+            penalties.append((-1, f"连涨{consec_up}日+偏MA5"))
+        if penalties:
+            worst = min(penalties, key=lambda x: x[0])
+            overheat_score = worst[0]
+            reasons.append(worst[1])
+            # RSI+连涨联合额外-1（两个独立维度同时触发才追加）
+            has_rsi_hot = any(p[0] <= -1 and "RSI" in p[1] for p in penalties)
+            has_consec_hot = any(p[0] <= -1 and "连涨" in p[1] for p in penalties)
+            if has_rsi_hot and has_consec_hot:
+                overheat_score -= 1
+                reasons.append(f"RSI+连涨联合过热")
+    overheat_score = max(-3, min(2, overheat_score))
+    score += overheat_score
 
-    # 量比
+    # ── 维度4: 量能 & 资金（独立信息维度）
     vr = ind["vol_ratio"]
     if vr >= 1.5 and close >= ma5:
         score += 1; reasons.append(f"放量{vr:.1f}x")
     elif vr < 0.6 and close < ma5:
         score -= 1; reasons.append(f"缩量弱势{vr:.1f}x")
 
-    # 三维信号强度加成
+    flow = ind.get("main_force_flow", 0.0)
+    if flow > 0.5:
+        score += 1; reasons.append(f"主力净流入{flow:.1f}亿")
+    elif flow < -0.5:
+        score -= 1; reasons.append(f"主力净流出{abs(flow):.1f}亿")
+
+    # 量价背离（独立信号：趋势向好但量能背离）
+    if (close > ma5 and consec_up >= 2 and vr < 0.7 and flow < -0.3):
+        score -= 1; reasons.append(f"量价背离(新高缩量{vr:.1f}x+主力流出{abs(flow):.1f}亿)")
+
+    # ── 维度5: 三维信号强度（基本面/资金面/ETF联动，独立于技术面）
     sig3d = info.get("signal_3d", "★☆☆")
     if score > 0:
         if sig3d == "★★★":
@@ -386,54 +458,7 @@ def score_stock(ind: dict, info: dict) -> tuple[int, list[str]]:
         elif sig3d == "★☆☆":
             score -= 1
 
-    # MA60趋势方向（中期趋势过滤）
-    ma60_slope = ind.get("ma60_slope_5d", 0.0)
-    if ma60_slope > 0.5:
-        score += 1; reasons.append(f"MA60上行(+{ma60_slope:.1f}%/5日)")
-    elif ma60_slope < -0.8:
-        score -= 2; reasons.append(f"MA60下行趋势({ma60_slope:.1f}%/5日)")
-    elif ma60_slope < -0.3:
-        score -= 1; reasons.append(f"MA60偏弱({ma60_slope:.1f}%/5日)")
-
-    # 连续下跌天数
-    consec = ind.get("consec_down_days", 0)
-    if consec >= 5:
-        score -= 1; reasons.append(f"连跌{consec}日")
-    elif consec >= 3 and ma60_slope < -0.2:
-        score -= 1; reasons.append(f"连跌{consec}日且MA60偏弱")
-
-    # 主力资金净流向
-    flow = ind.get("main_force_flow", 0.0)
-    if flow > 0.5:
-        score += 1; reasons.append(f"主力净流入{flow:.1f}亿")
-    elif flow < -0.5:
-        score -= 1; reasons.append(f"主力净流出{abs(flow):.1f}亿")
-
-    # 量价背离：新高+缩量+主力流出 → 顶部信号
-    vr = ind["vol_ratio"]
-    consec_up = ind.get("consec_up_days", 0)
-    if (close > ma5 and consec_up >= 2 and vr < 0.7 and flow < -0.3):
-        score -= 1; reasons.append(f"量价背离(新高缩量{vr:.1f}x+主力流出{abs(flow):.1f}亿)")
-
-    # 偏离MA20（追高风险，阈值比ETF系统宽松以适应个股波动）
-    dev_ma20 = (close - ma20) / ma20 * 100
-    if dev_ma20 >= 20:
-        score -= 2; reasons.append(f"严重偏离MA20+{dev_ma20:.0f}%")
-    elif dev_ma20 >= 12:
-        score -= 1; reasons.append(f"偏离MA20+{dev_ma20:.0f}%")
-
-    # 连涨天数惩罚（回测5月: BUY_STRONG 15样本全部处于连涨+多头排列，T+5均收-0.73%）
-    consec_up = ind.get("consec_up_days", 0)
-    if consec_up >= 5:
-        score -= 2; reasons.append(f"连涨{consec_up}日追高风险极高")
-    elif consec_up >= 3 and close > ma5 * 1.04:
-        score -= 1; reasons.append(f"连涨{consec_up}日+偏离MA5({(close/ma5-1)*100:.1f}%)")
-
-    # RSI+连涨联合惩罚（回测: BUY_STRONG追高样本RSI均68-76）
-    if rsi > 65 and consec_up >= 3:
-        score -= 1; reasons.append(f"RSI{rsi:.0f}+连涨{consec_up}日，动量衰减风险")
-
-    # MACD红柱连续缩短（趋势疲劳，追高风险）
+    # MACD红柱连续缩短（趋势疲劳）
     bar_now = ind.get("macd_bar", 0)
     bar_prev = ind.get("macd_bar_p", 0)
     if bar_now > 0 and bar_prev > 0 and bar_now < bar_prev * 0.85:
@@ -735,7 +760,10 @@ def check_reversal(
     }
 
 
-def calc_position(sig: str, info: dict, regime: str) -> int:
+def calc_position(sig: str, info: dict, regime: str, sector_rank: str = "neutral") -> int:
+    """仓位计算：基础仓位(regime×pool×信号) × 板块动量排名系数。
+    sector_rank = 'strong' 1.5×满配 / 'neutral' 1.0×标准 / 'weak' 0（零配）/ 'unknown' 不调整。
+    """
     if sig not in ("BUY_STRONG", "BUY_WATCH"):
         return 0
     cap    = REGIME_STOCK_MAX.get(regime, 0)
@@ -743,6 +771,11 @@ def calc_position(sig: str, info: dict, regime: str) -> int:
     base   = cap * factor
     if sig == "BUY_WATCH":
         base *= 0.6
+    # 板块动量排名加权：把"赛道选择力"这一唯一证实的alpha来源体现在仓位上
+    if sector_rank == "strong":
+        base *= 1.5
+    elif sector_rank == "weak":
+        base = 0
     return max(0, round(base))
 
 
@@ -1026,12 +1059,28 @@ def _price_snapshots_batch(syms: list[str], count: int = 65) -> dict[str, dict]:
                 if len(closes) >= 25:
                     ma20_prev = sum(closes[-25:-5]) / 20
                     ma20_slope = round((ma20 - ma20_prev) / ma20_prev * 100, 3) if ma20_prev > 0 else None
+                # 多周期动量（5/20/60日收益率%）
+                mom_5d = round((close / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else 0.0
+                mom_20d = round((close / closes[-21] - 1) * 100, 2) if len(closes) >= 21 else 0.0
+                mom_60d = round((close / closes[-min(61, len(closes))] - 1) * 100, 2) if len(closes) >= 10 else 0.0
+                # 三周期加权合成（短0.2+中0.5+长0.3）
+                _w5, _w20, _w60 = 0.2, 0.5, 0.3
+                _total_w = (_w5 if len(closes) >= 6 else 0) + (_w20 if len(closes) >= 21 else 0) + (_w60 if len(closes) >= 10 else 0)
+                mom_composite = round(
+                    (mom_5d * _w5 * (1 if len(closes) >= 6 else 0) +
+                     mom_20d * _w20 * (1 if len(closes) >= 21 else 0) +
+                     mom_60d * _w60 * (1 if len(closes) >= 10 else 0)) / _total_w, 3
+                ) if _total_w > 0 else 0.0
                 return sym, {
                     "close":      close,
                     "chg_pct":    chg,
                     "vs_ma5":     "↑" if close > ma5 else "↓",
                     "vs_ma20":    "↑" if close > ma20 else "↓",
-                    "ma20_slope": ma20_slope,   # 5日MA20斜率(%)，正=上行，负=下行
+                    "ma20_slope": ma20_slope,
+                    "mom_5d":     mom_5d,
+                    "mom_20d":    mom_20d,
+                    "mom_60d":    mom_60d,
+                    "mom_composite": mom_composite,
                 }
             except Exception:
                 if attempt == 0:
@@ -1146,14 +1195,17 @@ def fetch_macro_context() -> dict:
     except Exception as e:
         log.debug(f"集群恐慌检测: {e}")
 
-    # ── 7. 板块趋势（cluster代理ETF的MA20斜率，用于尾盘翻转过滤） ────────────
+    # ── 7. 板块趋势（多周期动量合成，用于买入门控+仓位分配） ────────────
     try:
         proxy_syms = list(set(_CLUSTER_PROXY_ETF.values()))
-        proxy_raw  = _price_snapshots_batch(proxy_syms, count=30)
+        proxy_raw  = _price_snapshots_batch(proxy_syms, count=65)
         cluster_trend: dict[str, float | None] = {}
         for cluster, sym in _CLUSTER_PROXY_ETF.items():
             snap = proxy_raw.get(sym)
-            cluster_trend[cluster] = snap.get("ma20_slope") if snap else None
+            # 优先用三周期合成动量，fallback 到 ma20_slope
+            cluster_trend[cluster] = (
+                snap.get("mom_composite") or snap.get("ma20_slope")
+            ) if snap else None
         ctx["cluster_trend"] = cluster_trend
     except Exception as e:
         log.debug(f"板块趋势获取失败: {e}")
@@ -1984,6 +2036,18 @@ def main(dry: bool = False, force: bool = False) -> None:
         if kline_panic:
             ctx["panic_clusters"] = kline_panic
             log.info(f"板块恐慌: {', '.join(f'{n}({v:+.1f}%)' for n,v in kline_panic)}")
+        # 构造恐慌 cluster 英文key集合（供恐慌反转买点使用）
+        _panic_en_keys: set[str] = set()
+        _cluster_avgs: dict[str, list[float]] = {}
+        for code, info in STOCK_UNIVERSE.items():
+            c = info.get("cluster", "")
+            chg = kline_chg_pcts.get(code)
+            if c and chg is not None:
+                _cluster_avgs.setdefault(c, []).append(chg)
+        for c, chgs in _cluster_avgs.items():
+            if sum(chgs) / len(chgs) <= -2.0:
+                _panic_en_keys.add(c)
+        ctx["panic_cluster_keys"] = _panic_en_keys
         kline_surge = detect_offense_surge(STOCK_UNIVERSE, kline_chg_pcts)
         if kline_surge:
             ctx["offense_surge"] = kline_surge
@@ -1993,6 +2057,48 @@ def main(dry: bool = False, force: bool = False) -> None:
 
     results:   list[dict] = []
     reversals: list[dict] = []
+
+    # ── 板块动量排名分档（决定仓位权重：强赛道满配、中性标准、弱势零配）────────
+    _cluster_trend = ctx.get("cluster_trend", {})
+    _sorted_clusters = sorted(
+        _cluster_trend.items(),
+        key=lambda x: x[1] if x[1] is not None else 0.0,
+        reverse=True,
+    )
+    n_clusters = len(_sorted_clusters)
+    _cluster_rank: dict[str, str] = {}  # cluster -> 'strong'/'neutral'/'weak'
+    if n_clusters > 0:
+        cut_top = n_clusters // 3
+        cut_bot = n_clusters - n_clusters // 3
+        for i, (cname, slope) in enumerate(_sorted_clusters):
+            if i < cut_top:
+                _cluster_rank[cname] = "strong"
+            elif i >= cut_bot:
+                _cluster_rank[cname] = "weak"
+            else:
+                _cluster_rank[cname] = "neutral"
+
+    # ── 读取盘中预警快照（用于信号一致性标注）────────────────────────────────
+    _intraday_snap_path = Path(__file__).parent / "state" / f"intraday_alerts_{datetime.today().strftime('%Y-%m-%d')}.json"
+    _intraday_alerts: dict[str, str] = {}
+    if _intraday_snap_path.exists():
+        try:
+            _intraday_alerts = json.loads(_intraday_snap_path.read_text(encoding="utf-8"))
+            log.info(f"盘中预警快照: {len(_intraday_alerts)} 条")
+        except Exception:
+            pass
+
+    # ── 前日止损未执行追踪（③执行闭环）─────────────────────────────────────
+    _pending_stops: set[str] = set()
+    _prev_snaps = sorted(Path(__file__).parent.glob("logs/stock_timing_*.json"))
+    if len(_prev_snaps) >= 2:
+        try:
+            _prev_data = json.loads(_prev_snaps[-2].read_text(encoding="utf-8"))
+            _pending_stops = {r["code"] for r in _prev_data if r.get("signal") == "SELL_STOP"}
+            if _pending_stops:
+                log.info(f"前日止损追踪: {len(_pending_stops)} 只待确认执行")
+        except Exception:
+            pass
 
     for code, info in STOCK_UNIVERSE.items():
         df = all_klines.get(code)
@@ -2077,6 +2183,19 @@ def main(dry: bool = False, force: bool = False) -> None:
                 sig = "HOLD"
                 reasons.append(f"高风险板块({cluster_now})，买入阈值+1，等待更强信号")
 
+        # ── 动态板块动量门（#2 行业开关层）──────────────────────────────────
+        # 组合回测：买入超额几乎全来自强势赛道，逆势赛道持续负超额。
+        # 用板块代理ETF的MA20斜率实时判断，下行赛道否决买入，走弱赛道抬门槛。
+        if sig in ("BUY_STRONG", "BUY_WATCH"):
+            _sector_slope = ctx.get("cluster_trend", {}).get(cluster_now)
+            if _sector_slope is not None:
+                if _sector_slope < SECTOR_MOM_VETO_SLOPE:
+                    sig = "HOLD"
+                    reasons.append(f"板块趋势下行(MA20斜率{_sector_slope:+.1f}%)，逆势暂不买入")
+                elif _sector_slope < SECTOR_MOM_WEAK_SLOPE and score < SCORE_BUY_STRONG:
+                    sig = "HOLD"
+                    reasons.append(f"板块走弱(MA20斜率{_sector_slope:+.1f}%)，非强共振降为观察")
+
         # MA60陡峭上行+RSI高位 = 动量衰竭区（回测: 德业+源杰+罗博特科等MA60>3.5%+RSI>68均大亏-11~-27%）
         ma60_slope = ind.get("ma60_slope_5d", 0.0)
         rsi_now = ind.get("rsi", 50)
@@ -2085,11 +2204,29 @@ def main(dry: bool = False, force: bool = False) -> None:
             reasons.append(f"MA60陡峭+{ma60_slope:.1f}%且RSI={rsi_now:.0f}，动量衰竭区不追高")
 
         # ── 减仓/止损过滤 ──────────────────────────────────────────────────
+        # ② 绝对止损闸门（最高优先级，不可被任何回测降级规则覆盖）
+        # A股闷杀特征：一字跌停/连续阴跌/业绩暴雷。触发即无条件清仓，保命底线。
+        hard_stop = False
+        _chg1 = ind.get("chg1", 0.0)
+        _chg3 = ind.get("chg3", 0.0)
+        _consec_down = ind.get("consec_down_days", 0)
+        _hard_reason = ""
+        if _chg1 <= HARD_STOP_DAY_DROP:
+            hard_stop = True; _hard_reason = f"单日暴跌{_chg1:.1f}%(近跌停)"
+        elif _chg3 <= HARD_STOP_3D_DROP:
+            hard_stop = True; _hard_reason = f"3日累计暴跌{_chg3:.1f}%(连续闷杀)"
+        elif _consec_down >= HARD_STOP_CONSEC_DOWN:
+            hard_stop = True; _hard_reason = f"连续收阴{_consec_down}日(趋势破位)"
+        if hard_stop:
+            sig = "SELL_STOP"
+            reasons.append(f"🛑绝对止损闸门：{_hard_reason}，无条件清仓(不可降级)")
+
         # SELL_STOP 降级规则（回测: SELL_STOP后T+5超额+3.34%，大量误杀）
+        # 仅对"非硬止损"触发的普通 SELL_STOP 生效；硬止损绝不降级。
         rsi_now = ind.get("rsi", 50)
         consec = ind.get("consec_below_ma60", 0)
         cluster_now = info.get("cluster", "")
-        if sig == "SELL_STOP":
+        if sig == "SELL_STOP" and not hard_stop:
             # watch池禁止SELL_STOP（回测: watch/★☆☆ SELL_STOP后T+5超额+4.21%）
             if pool == "watch":
                 sig = "REDUCE"
@@ -2113,8 +2250,34 @@ def main(dry: bool = False, force: bool = False) -> None:
                     sig = "REDUCE"
                     reasons.append(f"3日均价{recent_3d_avg:.2f}仍高于止损{stop_ref:.2f}，疑似假破位")
 
-        pos  = calc_position(sig, info, regime)
+        # ── 恐慌反转买入（④强赛道恐慌日逆向策略）─────────────────────────────
+        # 数据验证：强赛道恐慌日 T+3 均收+5.36% 胜率67%，比正常买入更优。
+        # 条件：信号偏弱(HOLD/REDUCE) + 强赛道今日恐慌 + RSI超卖 + MA60仍向上
+        _panic_keys = ctx.get("panic_cluster_keys", set())
+        _PANIC_STRONG = {"optics", "semicon", "pcb", "industrial_auto"}
+        if (sig in ("HOLD", "REDUCE")
+            and not hard_stop
+            and cluster_now in _panic_keys
+            and cluster_now in _PANIC_STRONG
+            and ind.get("rsi", 50) <= 40
+            and ind.get("ma60_slope_5d", 0) > 0
+            and pool != "watch"):
+            sig = "BUY_WATCH"
+            reasons.append(f"🔥恐慌反转：强赛道({cluster_now})恐慌日+RSI{ind['rsi']:.0f}超卖+MA60向上，逆向买入")
+
+        _cur_cluster = info.get("cluster", "")
+        _cur_rank = _cluster_rank.get(_cur_cluster, "neutral")
+        pos  = calc_position(sig, info, regime, sector_rank=_cur_rank)
         stop = calc_stop(ind, info)
+
+        # 盘中信号一致性对比
+        _intra = _intraday_alerts.get(code)
+        if _intra and _intra in ("REDUCE", "STOP_LOSS", "WARN_LOSS") and sig in ("BUY_STRONG", "BUY_WATCH", "HOLD"):
+            reasons.append(f"⚡盘中曾发{_intra}，收盘信号{sig}方向变化，谨慎对待")
+
+        # 前日止损未执行升级提醒（③执行闭环）
+        if code in _pending_stops and sig != "SELL_STOP":
+            reasons.append("🚨前日止损未执行！如仍持有请立即处理（信号已转为非止损，但风险未消除）")
 
         results.append({
             "code":         code,
@@ -2124,6 +2287,7 @@ def main(dry: bool = False, force: bool = False) -> None:
             "signal":       sig,
             "position_pct": pos,
             "stop_price":   stop,
+            "intraday_alert": _intra,
             "reasons":      reasons,
             "ind":          ind,
             "df":           df,
@@ -2167,7 +2331,9 @@ def main(dry: bool = False, force: bool = False) -> None:
         # CAUTION: 集群偏热 + 自身偏离MA5≥4% → 强买降为观察
         elif oh["level"] == "CAUTION" and sig == "BUY_STRONG" and dev_ma5 >= 4:
             r["signal"] = "BUY_WATCH"
-            r["position_pct"] = calc_position("BUY_WATCH", r["info"], regime)
+            _oh_cluster = r["info"].get("cluster", "")
+            r["position_pct"] = calc_position("BUY_WATCH", r["info"], regime,
+                                              sector_rank=_cluster_rank.get(_oh_cluster, "neutral"))
             r["reasons"].append(f"集群偏热+偏离MA5+{dev_ma5:.1f}%，强买降为观察")
             log.info(f"  集群偏热降级: {r['name']} {cluster} CAUTION→BUY_WATCH")
         # CAUTION + 自身连涨≥4 → 降为HOLD观察

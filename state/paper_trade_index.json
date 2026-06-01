@@ -1,7 +1,7 @@
 {
   "account": "index",
   "initial_capital": 1000000.0,
-  "cash": 587008.9139757301,
+  "cash": 468615.1387292301,
   "positions": {
     "513520": {
       "name": "日经225",
@@ -21,18 +21,9 @@
       "reason": "BUY_WATCH",
       "note": "动量偏强"
     },
-    "513180": {
-      "name": "恒生科技",
-      "shares": 200,
-      "cost_price": 0.6186179999999999,
-      "buy_date": "2026-05-06",
-      "stop_pct": 5.0,
-      "reason": "BUY_WATCH",
-      "note": "动量偏强"
-    },
     "510050": {
       "name": "上证50",
-      "shares": 12500,
+      "shares": 1600,
       "cost_price": 2.99299,
       "buy_date": "2026-05-07",
       "stop_pct": 5.0,
@@ -47,6 +38,15 @@
       "stop_pct": 5.0,
       "reason": "BUY_WATCH",
       "note": "动量偏强"
+    },
+    "159501": {
+      "name": "纳斯达克",
+      "shares": 69700,
+      "cost_price": 2.167165,
+      "buy_date": "2026-06-01",
+      "stop_pct": 5.0,
+      "reason": "BUY_WATCH",
+      "note": "动量强劲"
     }
   },
   "nav_history": [
@@ -241,6 +241,30 @@
       "market_value": 415591.0,
       "position_count": 5,
       "benchmark_close": 4.96
+    },
+    {
+      "date": "2026-05-29",
+      "nav": 1004524.16,
+      "cash": 605646.66,
+      "market_value": 398877.5,
+      "position_count": 5,
+      "benchmark_close": 4.92
+    },
+    {
+      "date": "2026-06-01",
+      "nav": 1007427.41,
+      "cash": 463869.31,
+      "market_value": 543558.1,
+      "position_count": 5,
+      "benchmark_close": 4.9
+    },
+    {
+      "date": "2026-06-01",
+      "nav": 1012093.74,
+      "cash": 468615.14,
+      "market_value": 543478.6,
+      "position_count": 5,
+      "benchmark_close": 4.87
     }
   ],
   "trades": [
@@ -447,8 +471,73 @@
       "amount": 62.22,
       "pnl_pct": 0.61,
       "reason": "REDUCE"
+    },
+    {
+      "date": "2026-05-29",
+      "code": "510050",
+      "name": "上证50",
+      "action": "SELL",
+      "price": 2.997,
+      "shares": 6200,
+      "amount": 18575.83,
+      "pnl_pct": 0.13,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-05-29",
+      "code": "513180",
+      "name": "恒生科技",
+      "action": "SELL",
+      "price": 0.6194,
+      "shares": 100,
+      "amount": 61.92,
+      "pnl_pct": 0.12,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-06-01",
+      "code": "510050",
+      "name": "上证50",
+      "action": "SELL",
+      "price": 2.987,
+      "shares": 3100,
+      "amount": 9256.95,
+      "pnl_pct": -0.2,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-06-01",
+      "code": "513180",
+      "name": "恒生科技",
+      "action": "SELL",
+      "price": 0.6244,
+      "shares": 100,
+      "amount": 62.42,
+      "pnl_pct": 0.93,
+      "reason": "REDUCE"
+    },
+    {
+      "date": "2026-06-01",
+      "code": "159501",
+      "name": "纳斯达克",
+      "action": "BUY",
+      "price": 2.1672,
+      "shares": 69700,
+      "amount": 151096.72,
+      "reason": "BUY_WATCH"
+    },
+    {
+      "date": "2026-06-01",
+      "code": "510050",
+      "name": "上证50",
+      "action": "SELL",
+      "price": 2.967,
+      "shares": 1600,
+      "amount": 4745.82,
+      "pnl_pct": -0.87,
+      "reason": "REDUCE"
     }
   ],
   "created_at": "2026-05-28",
-  "last_update": "2026-05-29T09:35:09"
+  "last_update": "2026-06-01T15:15:08"
 }
