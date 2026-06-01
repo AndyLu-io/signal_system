@@ -284,6 +284,41 @@ launchctl unload "$PLIST_REVIEW" 2>/dev/null
 launchctl load "$PLIST_REVIEW"
 echo "✅ 收盘后回测任务已加载（每日 16:00，--type all）"
 
+# ── 任务7：周度自动复盘（每周五 16:30）──────────────────────────────────────────
+LABEL_WEEKLY="com.claudetrade.weekly-review"
+PLIST_WEEKLY="$HOME/Library/LaunchAgents/${LABEL_WEEKLY}.plist"
+cat > "$PLIST_WEEKLY" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL_WEEKLY}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${SCRIPT_DIR}/weekly_review.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>5</integer>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/launchd_weekly_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/launchd_weekly_stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>${SCRIPT_DIR}</string>
+</dict>
+</plist>
+EOF
+launchctl unload "$PLIST_WEEKLY" 2>/dev/null
+launchctl load "$PLIST_WEEKLY"
+echo "✅ 周度复盘任务已加载（每周五 16:30）"
+
 echo ""
 echo "定时任务状态："
 launchctl list | grep claudetrade

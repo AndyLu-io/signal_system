@@ -2056,6 +2056,47 @@ def main(dry: bool = False, force: bool = False) -> None:
     ok_count = sum(1 for v in all_klines.values() if v is not None)
     log.info(f"K 线抓取完成：{ok_count}/{len(stock_codes)} 成功")
 
+    # ── 前瞻验证闭环：读昨日预判→比对今日实际板块涨跌→记录准确度 ──────────────
+    try:
+        from datetime import timedelta
+        _yesterday = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        _pred_file = Path(__file__).parent / "state" / f"forward_pred_{_yesterday}.json"
+        if _pred_file.exists():
+            _pred = json.loads(_pred_file.read_text(encoding="utf-8"))
+            # 算今日各cluster均涨跌
+            _today_chgs: dict[str, list[float]] = {}
+            for code, df in all_klines.items():
+                if df is not None and len(df) >= 2:
+                    chg = (float(df["close"].iloc[-1]) / float(df["close"].iloc[-2]) - 1) * 100
+                    c = STOCK_UNIVERSE.get(code, {}).get("cluster", "")
+                    if c:
+                        _today_chgs.setdefault(c, []).append(chg)
+            _cluster_avg = {c: sum(v)/len(v) for c, v in _today_chgs.items() if v}
+            # 验证
+            _hits, _total = 0, 0
+            if _pred.get("us10y_regime") == "DEFENSIVE":
+                _total += 1
+                _tech = sum(_cluster_avg.get(c, 0) for c in ("optics","semicon","pcb")) / 3
+                _def = sum(_cluster_avg.get(c, 0) for c in ("commodity","finance")) / 2
+                if _def > _tech:
+                    _hits += 1
+                    log.info(f"前瞻验证✅ 美债DEFENSIVE：防御({_def:+.1f}%)>科技({_tech:+.1f}%)")
+                else:
+                    log.info(f"前瞻验证❌ 美债DEFENSIVE：防御({_def:+.1f}%)<科技({_tech:+.1f}%)")
+            elif _pred.get("us10y_regime") == "TECH_FAVOR":
+                _total += 1
+                _tech = sum(_cluster_avg.get(c, 0) for c in ("optics","semicon","pcb")) / 3
+                _def = sum(_cluster_avg.get(c, 0) for c in ("commodity","finance")) / 2
+                if _tech > _def:
+                    _hits += 1
+                    log.info(f"前瞻验证✅ 美债TECH_FAVOR：科技({_tech:+.1f}%)>防御({_def:+.1f}%)")
+                else:
+                    log.info(f"前瞻验证❌ 美债TECH_FAVOR：科技({_tech:+.1f}%)<防御({_def:+.1f}%)")
+            if _total > 0:
+                log.info(f"前瞻验证摘要: {_hits}/{_total} 命中")
+    except Exception as _e:
+        log.debug(f"前瞻验证: {_e}")
+
     # 用 K 线最后两行计算今日涨跌幅，做集群恐慌检测（覆盖 fetch_macro_context 的 sector_snaps 结果）
     try:
         kline_chg_pcts: dict[str, float] = {}
